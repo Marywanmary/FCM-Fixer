@@ -100,19 +100,21 @@ update_hosts() {
     if [ $success -eq 1 ] && grep -q -i "google" "${dest_hosts}.tmp" 2>/dev/null; then
         mv -f "${dest_hosts}.tmp" "$dest_hosts"
         chmod 644 "$dest_hosts"
-        log_msg SUCCESS "Hosts 成功从远端更新 (当前模式: $hosts_mode)"
-        
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] --- 当前生效的 Hosts 内容 (模式: $hosts_mode) ---" > "$HOSTS_LOG"
-        cat "$dest_hosts" >> "$HOSTS_LOG"
+        log_msg SUCCESS "Hosts 成功从远端下载并写入模块目录"
     else
-        log_msg ERROR "Hosts 下载失败或内容不合法，若存在旧配置则继续使用。"
+        log_msg ERROR "Hosts 下载失败或内容不合法，若存在旧配置则保持使用。"
         rm -f "${dest_hosts}.tmp"
-        
-        if [ -f "$dest_hosts" ]; then
-            echo "[$(date "+%Y-%m-%d %H:%M:%S")] --- 使用模块内已存在的旧版 Hosts 内容 ---" > "$HOSTS_LOG"
-            cat "$dest_hosts" >> "$HOSTS_LOG"
-        fi
     fi
+
+    # 直接镜像系统真实生效视图，作为挂载成功与否的终极铁证
+    echo "[$(date "+%Y-%m-%d %H:%M:%S")] --- 当前 Android 系统真实生效的 /system/etc/hosts 视图 ---" > "$HOSTS_LOG"
+    if grep -q "google" /system/etc/hosts 2>/dev/null; then
+        log_msg SUCCESS "[挂载检查] 恭喜！检测到系统全局 /system/etc/hosts 已成功并入优选规则！"
+    else
+        log_msg ERROR "[挂载检查] 警报！系统全局 /system/etc/hosts 未发现优选规则，模块 Systemless 挂载可能失效！"
+    fi
+    cat /system/etc/hosts >> "$HOSTS_LOG"
+    echo "========================================================" >> "$HOSTS_LOG"
 }
 
 check_fcm_hosts_hit() {
@@ -122,24 +124,74 @@ check_fcm_hosts_hit() {
         return
     fi
 
-    local active_conns=$(netstat -an 2>/dev/null | grep -E "ESTABLISHED" | grep -E ":522[89]|:5230" | awk '{print $5}')
-    if [ -z "$active_conns" ]; then
-        log_msg WARN "当前未检测到活跃的 FCM (5228/5229/5230) TCP 连接。"
+    # 全局 Fake-IP 盲测判定
+    local dns_test=""
+    if command -v nslookup > /dev/null 2>&1; then
+        dns_test=$(nslookup a.fake.ip.test.fcm.fixer 2>/dev/null | grep -A 1 "Name:" | grep "Address" | awk '{print $2}' | tail -n 1)
+    fi
+    [ -z "$dns_test" ] && dns_test=$(ping -c 1 -W 1 a.fake.ip.test.fcm.fixer 2>/dev/null | grep -oE "\([0-9.]+\)" | tr -d '()')
+    
+    local is_fake_ip_global=0
+    if echo "$dns_test" | grep -q -E "^198\.18\."; then
+        is_fake_ip_global=1
+        log_msg WARN "📢 [网络状态] 当前处于透明代理 Fake-IP 托管环境。"
+    fi
+
+    # 获取全机活跃套接字会话中目标端口为 5228-5230/443 且状态为已建立的连接
+    local all_conns=$(ss -ant 2>/dev/null | grep "ESTAB" | grep -E ":522[89]|:5230|:443")
+    if [ -z "$all_conns" ]; then
+        log_msg WARN "当前未检测到任何活跃的 FCM (5228/5229/5230/443) TCP 连接。"
         return
     fi
 
-    for item in $active_conns; do
-        local clean_ip=${item%:*:-}
-        clean_ip=$(echo "$clean_ip" | tr -d '[]')
-        log_msg INFO "检测到当前活跃的 FCM 连接通道 IP: $clean_ip"
+    # 【分支 A：Fake-IP 穿透检测机制】
+    if [ "$is_fake_ip_global" -eq 1 ]; then
+        # 排除回环及Fake-IP保留网段，抓取代理内核发出的真实对端物理公网连接
+        local real_outbound=$(echo "$all_conns" | awk '{print $5}' | grep -v -E "^127\.|^10\.|^192\.168\.|^198\.1[89]\.")
+        if [ -n "$real_outbound" ]; then
+            echo "$real_outbound" | sort -u | while read -r remote_peer; do
+                local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
+                local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
+                log_msg INFO "🎯 [穿透追踪] 成功抓取到代理内核外发的 FCM 真实物理公网 IP: $clean_ip (端口: $clean_port)"
+                
+                if grep -q "$clean_ip" "$dest_hosts"; then
+                    local hit_line=$(grep "$clean_ip" "$dest_hosts" | head -n 1 | tr -s '\t ' ' ')
+                    log_msg MATCH "★★★ 命中成功！代理内核已成功将流量桥接至你的优选 Hosts 节点！ ★★★"
+                    log_msg MATCH "--> 命中规则: $hit_line"
+                else
+                    log_msg WARN "⚠️ 代理外发连接未命中优选 Hosts。原因：Clash 内核拥有独立 DNS 缓存或使用了远程公网 DNS 解析。"
+                fi
+            done
+            return
+        else
+            log_msg WARN "⚠️ 虽然检测到系统触发了 FCM 会话，但代理内核当前并没有向外发出直连(DIRECT)的公网物理 TCP 连接。"
+            log_msg WARN "💡 [诊断提示]：极大概率你在代理软件中将 FCM 域名分流到了 [代理/节点分组] 而非 DIRECT 直连。建议前往 Clash/Mihomo 将 mtalk.google.com 设为 DIRECT。"
+            return
+        fi
+    fi
+
+    # 【分支 B：常规直连/非 Fake-IP 精准检测】
+    # 筛选属于 GMS 核心进程的对应端口连接
+    local gms_conns=$(ss -antp 2>/dev/null | grep "ESTAB" | grep -E "com.google.android.gms|GmsCore" | grep -E ":522[89]|:5230|:443")
+    if [ -z "$gms_conns" ]; then
+        # 如果 ss -p 无法直接拿到进程（部分精简系统的限制），回退到全局检索
+        gms_conns="$all_conns"
+    fi
+
+    echo "$gms_conns" | awk '{print $5}' | sort -u | while read -r remote_peer; do
+        [ -z "$remote_peer" ] && continue
+        local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
+        local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
+        
+        log_msg INFO "发现活跃直连 FCM 通道 -> 远程 IP: $clean_ip | 目标端口: $clean_port"
         
         if grep -q "$clean_ip" "$dest_hosts"; then
             local hit_line=$(grep "$clean_ip" "$dest_hosts" | head -n 1 | tr -s '\t ' ' ')
-            log_msg MATCH "★★★ 验证成功！当前系统正使用优选节点，在 Hosts 中完美命中！ ★★★"
+            log_msg MATCH "★★★ 命中成功！当前连接正通过端口 [$clean_port] 直连优选 Hosts 节点！ ★★★"
             log_msg MATCH "--> 命中规则: $hit_line"
         else
-            log_msg WARN "未命中：当前通信 IP ($clean_ip) 不在你的优选 Hosts 列表中。"
-            log_msg WARN "原因可能是：FCM 流量被网络代理接管，或是系统走了其他的备用解析缓存。"
+            log_msg WARN "⚠️ 未命中：当前通信 IP ($clean_ip) 不在你的优选 Hosts 列表中。"
+            log_msg WARN "💡 [诊断提示]：若挂载正常，可能是由于系统仍在使用过期的本地旧 DNS 缓存，请重启 Google Play 服务或开关飞行模式重试。"
         fi
     done
 }
@@ -184,7 +236,7 @@ monitor_network_changes() {
                 
                 update_hosts &
                 
-                # 延迟 10 秒等待新网络下的会话建立完毕后，输出检测结果
+                # 延迟 10 秒等待新网络会话稳固后，输出穿透核对报告
                 ( sleep 10; log_fcm_info ) &
             fi
         fi
