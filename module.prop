@@ -1,6 +1,6 @@
-id=google-services-firewall-cleaner
-name=ColorOS Google 拦截规则清理
-version=3.0
-versionCode=260415
-author=CHIZI-0618
-description=清理 ColorOS 16 / RedMagic OS 中拦截 Google Play 商店和 Google Play 服务联网的 iptables 规则，使系统正常访问 Google 系服务。
+id=fcm-fixer
+name=FCM-Fixer
+version=v1.0.1
+versionCode=11
+author=Aghu
+description=清理系统底层防火墙拦截规则，多镜像源自动拉取 fcm-hosts 优选节点，防断连守护进程模式 (兼容 EROFS)。
