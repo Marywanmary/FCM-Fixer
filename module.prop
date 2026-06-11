@@ -1,6 +1,7 @@
 id=fcm-fixer
 name=FCM-Fixer
-version=v1.0.5
-versionCode=15
+version=v1.0.6
+versionCode=16
 author=Aghu
-description=基于Diagnostics深度优化：网络切换稳定后清理，智能连通性修复，详细诊断日志。支持双栈/仅IPv4，兼容EROFS。
+description=基于 Diagnostics 深度优化：精准网络侦测，GMS 内部状态诊断，在线更新支持。完美兼容 Magisk / KernelSU / APatch。
+updateJson=https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/update.json
