@@ -2,7 +2,7 @@
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
-# 轮转旧日志（基于规范后的持久化目录操作）
+# 轮转旧日志（基于持久化目录操作）
 [ -f "$MASTER_LOG" ] && mv -f "$MASTER_LOG" "$MASTER_LOG_OLD"
 [ -f "$MASTER_HOSTS" ] && mv -f "$MASTER_HOSTS" "$MASTER_HOSTS_OLD"
 
@@ -39,6 +39,7 @@ done
     log_fcm_info
     track_fcm_hits_loop &
 
+    # 【第三阶段：30秒后强制断线重连，解决 DNS 抢跑】
     (
         sleep 30
         log_msg INFO "触发开机 30 秒整终极防补发规则复查..."
@@ -46,6 +47,13 @@ done
             remove_block_rules "filter" "$chain" "ipv4"
             remove_block_rules "filter" "$chain" "ipv6"
         done
+        
+        # 强制斩断 GMS 抢跑的旧连接，迫使其依据新 Hosts 发起重连
+        log_msg INFO "强制重置 GmsCore 网络通道，切断抢跑连接，应用优选 Hosts..."
+        killall -9 com.google.android.gms.persistent 2>/dev/null
+        
+        # 再触发一次命中追踪探测链，验证重连结果
+        track_fcm_hits_loop &
     ) &
 
     monitor_network_changes &
