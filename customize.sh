@@ -1,53 +1,42 @@
 #!/system/bin/sh
 
-# ==========================================
-# 1. 标题头
-# ==========================================
 ui_print "*****************************************"
-ui_print "* 本项目基于ColorOS-Google-Firewall-Fixer/CHIZI-0618 *"
-ui_print "* 和fcm-hosts-next/cagedbird043 *"
-ui_print "* 修复国产魔改OS中拦截 Google Play 商店和 Google Play 服务联网的 iptables 规则 *"
-ui_print "* 提供更稳定的 FCM 长连接入口 *"
+ui_print "* 本项目基于ColorOS-Google-Firewall-Fixer *"
+ui_print "* 和 fcm-hosts-next/cagedbird043 *"
+ui_print "* 修复魔改OS拦截，提供稳定的 FCM 长连接 *"
 ui_print "*****************************************"
 ui_print ""
 
 # ==========================================
-# 2. 音量键交互菜单 (10 秒无操作自动确认)
+# 音量键精确直控逻辑 (10 秒自动默认)
 # ==========================================
 ui_print "========================================="
 ui_print "请选择 FCM 网络模式："
-ui_print "[ 1 ] 双栈模式 (Dual-Stack) - 默认"
-ui_print "[ 2 ] 仅 IPv4 (IPv4 Only)"
+ui_print "[音量 +] : 双栈模式 (Dual-Stack) -> 默认"
+ui_print "[音量 -] : 仅 IPv4 (IPv4 Only)"
 ui_print "========================================="
-ui_print "* 按 [音量 +/-] 切换选项"
-ui_print "* 停止按键 10 秒后将自动确认当前选项"
+ui_print "* (10 秒无操作将自动安装默认 双栈模式)"
 ui_print ""
 
 rm -f $TMPDIR/events.log
 getevent -ql > $TMPDIR/events.log 2>/dev/null &
 EVENT_PID=$!
 
-CHOICE=1
+CHOICE=1 # 默认 1=双栈
 END_TIME=$(( $(date +%s) + 10 ))
-
-ui_print "-> 当前选择: 模式 $CHOICE (10 秒后自动确认)"
 
 while [ $(date +%s) -lt $END_TIME ]; do
     if [ -s $TMPDIR/events.log ]; then
         KEY=$(tail -n 1 $TMPDIR/events.log | awk '{print $4}')
         
-        if [ "$KEY" = "KEY_VOLUMEDOWN" ] || [ "$KEY" = "KEY_VOLUMEUP" ]; then
-            if [ "$KEY" = "KEY_VOLUMEDOWN" ]; then
-                CHOICE=$((CHOICE + 1))
-                [ $CHOICE -gt 2 ] && CHOICE=1
-            else
-                CHOICE=$((CHOICE - 1))
-                [ $CHOICE -lt 1 ] && CHOICE=2
-            fi
-            ui_print "-> 切换至: 模式 $CHOICE (10 秒后自动确认)"
-            > $TMPDIR/events.log
-            END_TIME=$(( $(date +%s) + 10 ))
-            sleep 0.3
+        if [ "$KEY" = "KEY_VOLUMEUP" ]; then
+            CHOICE=1
+            ui_print "-> 您按下了 [音量 +]，已确认：双栈模式！"
+            break
+        elif [ "$KEY" = "KEY_VOLUMEDOWN" ]; then
+            CHOICE=2
+            ui_print "-> 您按下了 [音量 -]，已确认：仅 IPv4 模式！"
+            break
         fi
     fi
     sleep 0.2
@@ -56,21 +45,18 @@ done
 kill $EVENT_PID 2>/dev/null
 rm -f $TMPDIR/events.log
 
-ui_print "- 已确认选择！"
-
-# ==========================================
-# 3. 配置文件名及下载源
-# ==========================================
-if [ $CHOICE -eq 1 ]; then
-  MODE="双栈模式"
-  FILE="fcm_dual.hosts"
-else
-  MODE="仅 IPv4"
-  FILE="fcm_ipv4.hosts"
+if [ $(date +%s) -ge $END_TIME ]; then
+    ui_print "-> 10秒倒计时结束，已自动确认默认选项：双栈模式！"
 fi
 
-ui_print ""
-ui_print "- 最终配置: [$MODE]"
+# ==========================================
+# 配置文件名及下载源
+# ==========================================
+if [ $CHOICE -eq 1 ]; then
+  FILE="fcm_dual.hosts"
+else
+  FILE="fcm_ipv4.hosts"
+fi
 
 MIRRORS="
 https://fcm-hosts.cagedbird.cn/$FILE
@@ -78,7 +64,7 @@ https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts
 "
 
 # ==========================================
-# 4. 构建 Systemless Hosts
+# 构建 Systemless Hosts
 # ==========================================
 mkdir -p $MODPATH/system/etc
 echo "127.0.0.1 localhost" > $MODPATH/system/etc/hosts
@@ -93,24 +79,23 @@ for URL in $MIRRORS; do
     
     if grep -q "google" "$MODPATH/system/etc/hosts"; then
         SUCCESS=1
-        ui_print "- Hosts 规则下载并合并成功！"
+        ui_print "- Hosts 规则合并成功！"
         break
     else
-        ui_print "  x 下载失败或内容无效，切换下一节点..."
+        ui_print "  x 下载超时或无效，切换节点..."
     fi
 done
 
 if [ $SUCCESS -eq 0 ]; then
-    ui_print "! 所有镜像源均访问失败，请检查网络后重试。"
+    ui_print "! 所有镜像源访问失败，请检查网络。"
     abort "! 刷入中止"
 fi
 
 # ==========================================
-# 5. 权限与收尾
+# 权限与收尾
 # ==========================================
-ui_print "- 配置系统防火墙清道夫 (service.sh)..."
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm $MODPATH/service.sh 0 0 0755
 set_perm $MODPATH/system/etc/hosts 0 0 0644
 
-ui_print "- 模块 v1.0.5 安装完成！重启后生效。"
+ui_print "- 模块安装完成！重启后生效。"
