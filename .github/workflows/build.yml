@@ -1,4 +1,4 @@
-name: Build Magisk/KernelSU/APatch Module
+name: Build Module
 
 # 触发条件：当你推送代码到 main 分支，或者发布 tag 时触发
 on:
@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 读取版本号
         id: get_version
@@ -30,7 +30,7 @@ jobs:
           zip -r9 output/FCM-Fixer-${{ env.VERSION }}.zip . -x "*.git*" -x ".github/*" -x "output/*" -x "*.md"
 
       - name: 上传构建产物 (Artifact)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: FCM-Fixer-Module
           path: output/*.zip
