@@ -113,7 +113,6 @@ update_hosts() {
     if [ $success -eq 1 ] && grep -q -i "google" "${dest_hosts}.tmp" 2>/dev/null; then
         # ========================================================
         # 🌟 核心修复 1：重构写入逻辑，强制保留并注入标准 Localhost 回环头！
-        # 绝对不能清空系统本地回环，保障 Box/Clash 本地代理控制流的绝对正常
         # ========================================================
         echo -e "127.0.0.1       localhost\n::1             localhost\n\n# === FCM Hosts Optimizer Start ===" > "$dest_hosts"
         cat "${dest_hosts}.tmp" >> "$dest_hosts"
@@ -162,17 +161,19 @@ check_fcm_hosts_hit() {
         is_fake_ip_global=1
     fi
 
-    local all_conns=$(ss -ant 2>/dev/null | grep "ESTAB" | grep -E ":522[89]|:5230|:443")
-    if [ -z "$all_conns" ]; then
-        return
-    fi
+    # 【修复 443 洪流 - 仅限制专属端口作为盲测池】
+    local fcm_exclusive_conns=$(ss -ant 2>/dev/null | grep "ESTAB" | grep -E ":522[89]|:5230")
 
     if [ "$is_fake_ip_global" -eq 1 ]; then
-        local real_outbound=$(echo "$all_conns" | awk '{print $5}' | grep -v -E "^127\.|^10\.|^192\.168\.|^198\.1[89]\.")
+        if [ -z "$fcm_exclusive_conns" ]; then return; fi
+        local real_outbound=$(echo "$fcm_exclusive_conns" | awk '{print $5}' | grep -v -E "^127\.|^10\.|^192\.168\.|^198\.1[89]\.")
         if [ -n "$real_outbound" ]; then
             echo "$real_outbound" | sort -u | while read -r remote_peer; do
                 local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
+                # 【核心修复 3】：剥离 Linux 双栈套接字附加的 ::ffff: 壳子
+                clean_ip=$(echo "$clean_ip" | sed -E 's/^::ffff://i')
                 local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
+                
                 log_msg INFO "🎯 [穿透追踪] 成功抓取到代理内核外发的 FCM 真实物理公网 IP: $clean_ip (端口: $clean_port)"
                 if grep -q "$clean_ip" "$dest_hosts"; then
                     log_msg MATCH "★★★ 命中成功！代理内核已成功将流量桥接至你的优选 Hosts 节点！ ★★★"
@@ -185,13 +186,22 @@ check_fcm_hosts_hit() {
         return
     fi
 
+    # 常规直连/非 Fake-IP 模式探测
+    # 尝试精准抓取 GMS 进程（包含 443 备用通道）
     local gms_conns=$(ss -antp 2>/dev/null | grep "ESTAB" | grep -E "com.google.android.gms|GmsCore" | grep -E ":522[89]|:5230|:443")
-    [ -z "$gms_conns" ] && gms_conns="$all_conns"
+    
+    # 【修复 443 洪流 - 兜底策略降级】如果拿不到进程名，绝对不抓 443，只抓专属端口
+    [ -z "$gms_conns" ] && gms_conns="$fcm_exclusive_conns"
+
+    if [ -z "$gms_conns" ]; then return; fi
 
     echo "$gms_conns" | awk '{print $5}' | sort -u | while read -r remote_peer; do
         [ -z "$remote_peer" ] && continue
         local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
+        # 【核心修复 3】：剥离 Linux 双栈套接字附加的 ::ffff: 壳子
+        clean_ip=$(echo "$clean_ip" | sed -E 's/^::ffff://i')
         local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
+        
         log_msg INFO "发现活跃直连 FCM 通道 -> 远程 IP: $clean_ip | 目标端口: $clean_port"
         if grep -q "$clean_ip" "$dest_hosts"; then
             log_msg MATCH "★★★ 命中成功！当前连接正通过端口 [$clean_port] 直连优选 Hosts 节点！ ★★★"
