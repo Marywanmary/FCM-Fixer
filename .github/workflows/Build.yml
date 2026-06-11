@@ -1,6 +1,5 @@
-name: Release Module
+name: Build Universal Root Module
 
-# 触发条件：当推送形如 v1.0, v1.0.1 的 Tag 时，或者手动点击运行
 on:
   push:
     tags:
@@ -11,49 +10,73 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     
-    # 强制使用 Node.js 24，消除底层的官方弃用警告
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-    # 必须赋予写权限，否则 Action 无法在你的仓库里创建 Release
     permissions:
       contents: write
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 提取完整历史，以便能够推送回 main 分支
+          fetch-depth: 0
 
-      - name: 读取版本号与设置标签
+      - name: 读取版本信息与设置标签
         id: get_info
         run: |
-          # 从 module.prop 中提取版本号 (此时提取出来的值已经是 v1.0.1)
           VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
+          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
           
-          # 判断是推送 Tag 触发还是手动触发，动态生成包名
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
           else
-            # 手动触发时，直接使用提取出的 VERSION 加时间戳，去掉了多余的 'v'
             echo "RELEASE_TAG=${VERSION}-$(date +'%Y%m%d')" >> $GITHUB_ENV
           fi
 
-      - name: 打包为 ZIP 模块
+      - name: 自动生成 update.json
+        run: |
+          # 动态写入最新的版本号和带反代的下载链接
+          cat <<EOF > update.json
+          {
+            "version": "${{ env.VERSION }}",
+            "versionCode": ${{ env.VERSION_CODE }},
+            "zipUrl": "https://github.boki.moe/https://github.com/Marywanmary/FCM-Fixer/releases/download/${{ env.RELEASE_TAG }}/FCM-Fixer-${{ env.RELEASE_TAG }}.zip",
+            "changelog": "https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/CHANGELOG.md"
+          }
+          EOF
+
+      - name: 将 update.json 推送回仓库
+        run: |
+          # 配置 GitHub Actions 机器人身份
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          # 仅当文件有改动时才提交，[skip ci] 防止触发死循环
+          git commit -m "chore: 机器人自动更新 update.json 为 ${{ env.RELEASE_TAG }} [skip ci]" || echo "No changes to commit"
+          # 强制推送回 main 分支
+          git push origin HEAD:main
+
+      - name: 打包为通用 Root 模块 (ZIP)
         run: |
           mkdir -p output
-          # 排除隐藏文件夹和 Markdown 说明文档，保持包体纯净
           zip -r9 output/FCM-Fixer-${{ env.RELEASE_TAG }}.zip . -x "*.git*" -x ".github/*" -x "output/*" -x "*.md"
 
       - name: 自动创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          # Release 的标题也会同步修复
           name: FCM-Fixer Release ${{ env.RELEASE_TAG }}
           body: |
             ### 🚀 FCM-Fixer 更新
-            - 自动打包生成的模块文件。
-            - 请下载下方的 `.zip` 文件并通过 Magisk / KernelSU / APatch 刷入。
+            - 全自动打包生成的模块文件。
+            - **兼容性：** 完美支持 **Magisk** / **KernelSU** / **APatch**。
+            - 请下载下方的 `.zip` 文件，并在您的 Root 管理器中本地刷入即可。
+            
+            *提示：已安装此模块的用户将在管理器内收到在线更新推送。*
           files: output/FCM-Fixer-*.zip
           draft: false
           prerelease: false
