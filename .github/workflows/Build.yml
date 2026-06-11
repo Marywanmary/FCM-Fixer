@@ -4,16 +4,15 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - 'update.json' # 忽略对 update.json 的自身变更，防止死循环
+    paths:
+      - 'module.prop' # 🌟 核心优化：仅当探测到 module.prop 被修改并推送时，才触发自动编译发版流程
   workflow_dispatch:
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
-      TZ: Asia/Shanghai # 强制使用中国标准时间 (CST)，解决服务器时区死死停在UTC昨天的Bug
+      TZ: Asia/Shanghai
     permissions:
       contents: write
 
@@ -26,12 +25,10 @@ jobs:
       - name: 读取版本信息并生成带日期的标签
         id: get_info
         run: |
-          # 提取版本号并利用 sed 自动过滤掉可能自带的 'v' 或 'V' 前缀，防止双重 'v' (如 vv1.0.4)
           VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | sed 's/^[vV]//')
           VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
           DATE=$(date +'%Y%m%d')
           
-          # 统一规范化 release 标签格式
           RELEASE_TAG="v${VERSION}-${DATE}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
@@ -54,14 +51,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add update.json
-          # 使用 [skip ci] 确保回push代码时绝不重复触发工作流
           git commit -m "chore: 机器人自动更新 update.json 为 ${{ env.RELEASE_TAG }} [skip ci]" || echo "无变更"
           git push origin HEAD:main
 
       - name: 打包模块 ZIP
         run: |
           mkdir -p output
-          # 极致安全打包：排除 output 目录、所有 markdown 文本、git 痕迹以及 CI 临时生成的 update.json
           zip -r9 "output/FCM-Fixer-${{ env.RELEASE_TAG }}.zip" . \
             -x "output/*" -x "*.git*" -x ".github/*" -x "*.md" -x "*.log" -x "update.json"
 
@@ -77,7 +72,7 @@ jobs:
             - **框架支持**：Magisk / KernelSU / APatch (Systemless 挂载)
             
             #### 🗂️ 本版更新日志快报
-            建议参见项目根目录的 [CHANGELOG.md](https://github.com/Marywanmary/FCM-Fixer/blob/main/CHANGELOG.md) 查看详细变更。
+            建议参见项目根目录的 [CHANGELOG.md](https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/CHANGELOG.md) 查看详细变更。
           files: output/FCM-Fixer-*.zip
           draft: false
           prerelease: false
