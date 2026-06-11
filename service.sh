@@ -14,7 +14,7 @@ OLDLOG="$LOGDIR/fcm_fixer_old.log"
 if [ -f "$LOGFILE" ]; then
     mv -f "$LOGFILE" "$OLDLOG"
 fi
-echo "=== FCM-Fixer Service v1.0.5 启动于 $(date '+%Y-%m-%d %H:%M:%S') ===" > $LOGFILE
+echo "=== FCM-Fixer Service 启动于 $(date '+%Y-%m-%d %H:%M:%S') ===" > $LOGFILE
 
 # 等待系统就绪
 while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done
