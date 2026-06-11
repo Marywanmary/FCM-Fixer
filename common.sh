@@ -1,7 +1,6 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
 
-# === 依照用户要求：主日志放置在独立的持久化目录 /data/adb/fcm_fixer/ ===
 SAFE_DIR="/data/adb/fcm_fixer"
 mkdir -p "$SAFE_DIR"
 
@@ -12,7 +11,6 @@ MASTER_HOSTS_OLD="$SAFE_DIR/hosts_old.log"
 
 BOX_RUN_DIR="/data/adb/box/run"
 
-# 智能双向同步函数
 sync_to_box() {
     if [ -d "$BOX_RUN_DIR" ] || mkdir -p "$BOX_RUN_DIR" 2>/dev/null; then
         cp -f "$MASTER_LOG" "$BOX_RUN_DIR/fcm_fixer.log" 2>/dev/null
@@ -111,9 +109,6 @@ update_hosts() {
     fi
 
     if [ $success -eq 1 ] && grep -q -i "google" "${dest_hosts}.tmp" 2>/dev/null; then
-        # ========================================================
-        # 🌟 核心修复 1：重构写入逻辑，强制保留并注入标准 Localhost 回环头！
-        # ========================================================
         echo -e "127.0.0.1       localhost\n::1             localhost\n\n# === FCM Hosts Optimizer Start ===" > "$dest_hosts"
         cat "${dest_hosts}.tmp" >> "$dest_hosts"
         echo -e "\n# === FCM Hosts Optimizer End ===" >> "$dest_hosts"
@@ -147,9 +142,6 @@ check_fcm_hosts_hit() {
         return
     fi
 
-    # ========================================================
-    # 🌟 核心修复 2：利用 timeout 2 强行阻断保护，防止 nslookup 永久死锁挂起主线程
-    # ========================================================
     local dns_test=""
     if command -v nslookup > /dev/null 2>&1; then
         dns_test=$(timeout 2 nslookup a.fake.ip.test.fcm.fixer 2>/dev/null | grep -A 1 "Name:" | grep "Address" | awk '{print $2}' | tail -n 1)
@@ -161,7 +153,6 @@ check_fcm_hosts_hit() {
         is_fake_ip_global=1
     fi
 
-    # 【修复 443 洪流 - 仅限制专属端口作为盲测池】
     local fcm_exclusive_conns=$(ss -ant 2>/dev/null | grep "ESTAB" | grep -E ":522[89]|:5230")
 
     if [ "$is_fake_ip_global" -eq 1 ]; then
@@ -170,7 +161,6 @@ check_fcm_hosts_hit() {
         if [ -n "$real_outbound" ]; then
             echo "$real_outbound" | sort -u | while read -r remote_peer; do
                 local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
-                # 【核心修复 3】：剥离 Linux 双栈套接字附加的 ::ffff: 壳子
                 clean_ip=$(echo "$clean_ip" | sed -E 's/^::ffff://i')
                 local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
                 
@@ -186,11 +176,7 @@ check_fcm_hosts_hit() {
         return
     fi
 
-    # 常规直连/非 Fake-IP 模式探测
-    # 尝试精准抓取 GMS 进程（包含 443 备用通道）
     local gms_conns=$(ss -antp 2>/dev/null | grep "ESTAB" | grep -E "com.google.android.gms|GmsCore" | grep -E ":522[89]|:5230|:443")
-    
-    # 【修复 443 洪流 - 兜底策略降级】如果拿不到进程名，绝对不抓 443，只抓专属端口
     [ -z "$gms_conns" ] && gms_conns="$fcm_exclusive_conns"
 
     if [ -z "$gms_conns" ]; then return; fi
@@ -198,7 +184,6 @@ check_fcm_hosts_hit() {
     echo "$gms_conns" | awk '{print $5}' | sort -u | while read -r remote_peer; do
         [ -z "$remote_peer" ] && continue
         local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
-        # 【核心修复 3】：剥离 Linux 双栈套接字附加的 ::ffff: 壳子
         clean_ip=$(echo "$clean_ip" | sed -E 's/^::ffff://i')
         local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
         
