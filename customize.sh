@@ -8,7 +8,7 @@ ui_print "*****************************************"
 ui_print ""
 
 # ==========================================
-# 音量键精确直控逻辑 (10 秒自动默认)
+# 音量键精确直控逻辑 (修复读取偏移，秒响应)
 # ==========================================
 ui_print "========================================="
 ui_print "请选择 FCM 网络模式："
@@ -27,13 +27,14 @@ END_TIME=$(( $(date +%s) + 10 ))
 
 while [ $(date +%s) -lt $END_TIME ]; do
     if [ -s $TMPDIR/events.log ]; then
-        KEY=$(tail -n 1 $TMPDIR/events.log | awk '{print $4}')
+        # 修复：直接截取整行，用正则检索关键字，避免 awk 列偏移导致的错误
+        LAST_EVENT=$(tail -n 1 $TMPDIR/events.log)
         
-        if [ "$KEY" = "KEY_VOLUMEUP" ]; then
+        if echo "$LAST_EVENT" | grep -q "KEY_VOLUMEUP"; then
             CHOICE=1
             ui_print "-> 您按下了 [音量 +]，已确认：双栈模式！"
             break
-        elif [ "$KEY" = "KEY_VOLUMEDOWN" ]; then
+        elif echo "$LAST_EVENT" | grep -q "KEY_VOLUMEDOWN"; then
             CHOICE=2
             ui_print "-> 您按下了 [音量 -]，已确认：仅 IPv4 模式！"
             break
@@ -91,9 +92,6 @@ if [ $SUCCESS -eq 0 ]; then
     abort "! 刷入中止"
 fi
 
-# ==========================================
-# 权限与收尾
-# ==========================================
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm $MODPATH/service.sh 0 0 0755
 set_perm $MODPATH/system/etc/hosts 0 0 0644
