@@ -9,13 +9,12 @@ LOGFILE_OLD="$BOX_RUN_DIR/fcm_fixer_old.log"
 HOSTS_LOG="$BOX_RUN_DIR/hosts.log"
 HOSTS_LOG_OLD="$BOX_RUN_DIR/hosts_old.log"
 
-# === 全新日志输出系统 (时间 + 分级 + 颜色) ===
+# 全新日志输出系统 (时间 + 分级 + 颜色)
 log_msg() {
     local level="$1"
     local msg="$2"
     local time_str=$(date "+%Y-%m-%d %H:%M:%S")
     
-    # ANSI 颜色定义 (兼容 KernelSU/Box 等支持彩色输出的查看器)
     local C_RESET="\033[0m"
     local C_INFO="\033[36m"    # 青色
     local C_WARN="\033[33m"    # 黄色
@@ -116,7 +115,6 @@ update_hosts() {
     fi
 }
 
-# === 新增：检查 FCM 连接 IP 是否命中 Hosts ===
 check_fcm_hosts_hit() {
     local dest_hosts="$MODDIR/system/etc/hosts"
     if [ ! -f "$dest_hosts" ]; then
@@ -124,54 +122,43 @@ check_fcm_hosts_hit() {
         return
     fi
 
-    # 抓取系统中目标端口为 5228/5229/5230 且状态为 ESTABLISHED（已连接）的会话
     local active_conns=$(netstat -an 2>/dev/null | grep -E "ESTABLISHED" | grep -E ":522[89]|:5230" | awk '{print $5}')
-    
     if [ -z "$active_conns" ]; then
-        log_msg WARN "当前未检测到活跃的 FCM (5228/5229/5230) TCP 连接。可能是刚开机或尚未重连。"
+        log_msg WARN "当前未检测到活跃的 FCM (5228/5229/5230) TCP 连接。"
         return
     fi
 
     for item in $active_conns; do
-        # 提取目标 IP：去掉最后一个冒号和端口号，并清理 IPv6 的中括号
         local clean_ip=${item%:*:-}
         clean_ip=$(echo "$clean_ip" | tr -d '[]')
-        
         log_msg INFO "检测到当前活跃的 FCM 连接通道 IP: $clean_ip"
         
-        # 将该 IP 与下载的 Hosts 进行强匹配
         if grep -q "$clean_ip" "$dest_hosts"; then
             local hit_line=$(grep "$clean_ip" "$dest_hosts" | head -n 1 | tr -s '\t ' ' ')
             log_msg MATCH "★★★ 验证成功！当前系统正使用优选节点，在 Hosts 中完美命中！ ★★★"
             log_msg MATCH "--> 命中规则: $hit_line"
         else
             log_msg WARN "未命中：当前通信 IP ($clean_ip) 不在你的优选 Hosts 列表中。"
-            log_msg WARN "原因可能是：FCM 流量被网络代理(Clash/Box等)接管，或是系统走了其他的备用解析缓存。"
+            log_msg WARN "原因可能是：FCM 流量被网络代理接管，或是系统走了其他的备用解析缓存。"
         fi
     done
 }
 
 log_fcm_info() {
     echo -e "\n\033[36m================= FCM 状态与诊断截取 =================\033[0m" >> "$LOGFILE"
-    
-    # 执行 Hosts 实际命中检测验证
     check_fcm_hosts_hit
-    
     log_msg INFO "抓取 GcmService 核心状态:"
     dumpsys activity service com.google.android.gms/.gcm.GcmService 2>/dev/null | grep -E -i "connection|endpoint|connected|status|error|network" -A 5 >> "$LOGFILE"
     echo -e "\033[36m========================================================\033[0m\n" >> "$LOGFILE"
 }
 
-# === 事件驱动的网络状态监视 ===
 monitor_network_changes() {
     log_msg INFO "网络状态监视守护进程已启动 (内核事件驱动模式)..."
-    
     local last_trigger=0
     
     ip monitor route | while read -r line; do
         if echo "$line" | grep -q "default via"; then
             local current_time=$(date +%s)
-            
             if [ $((current_time - last_trigger)) -gt 10 ]; then
                 last_trigger=$current_time
                 sleep 3
@@ -197,7 +184,7 @@ monitor_network_changes() {
                 
                 update_hosts &
                 
-                # 延迟10秒后，网络稳定下来，检查一次 FCM 是否成功按照新 Hosts 连接
+                # 延迟 10 秒等待新网络下的会话建立完毕后，输出检测结果
                 ( sleep 10; log_fcm_info ) &
             fi
         fi
