@@ -1,7 +1,7 @@
 SKIPUNZIP=0
 
 ui_print "- 正在安装 FCM Fixer & Hosts Optimizer"
-ui_print "- 版本: v1.0.2 | 作者: ssll"
+ui_print "- 版本: v1.0.4 | 作者: ssll"
 
 ui_print " "
 ui_print "======================================="
@@ -47,12 +47,10 @@ else
     echo "dual" > "$MODPATH/hosts_mode.conf"
 fi
 
-# 提前创建挂载所需的底层目录
 mkdir -p "$MODPATH/system/etc"
 dest_hosts="$MODPATH/system/etc/hosts"
 
-# 尝试在刷入时直接下载 Hosts 并给出反馈
-ui_print "- 正在尝试下载最新 Hosts..."
+ui_print "- 正在尝试预下载最新 Hosts..."
 if [ "$mode" = "ipv4" ]; then
     url="https://fcm-hosts.cagedbird.cn/fcm_ipv4.hosts"
     fallback="https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/fcm_ipv4.hosts"
@@ -71,7 +69,7 @@ if curl -sL --connect-timeout 5 -o "${dest_hosts}.tmp" "$url" || curl -sL --conn
         ui_print "- ⚠️ Hosts 内容异常，将在开机后重试下载。"
     fi
 else
-    ui_print "- ⚠️ 网络不通或超时，将在开机后由后台服务自动下载。"
+    ui_print "- ⚠️ 网络超时，将在开机后由后台服务自动下载。"
 fi
 
 ui_print "- 安装完成，请重启设备！"
