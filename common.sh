@@ -1,11 +1,15 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
 
-# 日志目录与 Box 共享，不存在则创建
 BOX_RUN_DIR="/data/adb/box/run"
 mkdir -p "$BOX_RUN_DIR"
+
 LOGFILE="$BOX_RUN_DIR/fcm_fixer.log"
 LOGFILE_OLD="$BOX_RUN_DIR/fcm_fixer_old.log"
+
+# 新增独立的 Hosts 日志路径
+HOSTS_LOG="$BOX_RUN_DIR/hosts.log"
+HOSTS_LOG_OLD="$BOX_RUN_DIR/hosts_old.log"
 
 remove_block_rules() {
     local table="${1:-filter}"
@@ -37,13 +41,12 @@ wait_for_network() {
     local i=0
     while [ $i -lt 30 ]; do
         if ping -c 1 -W 1 223.5.5.5 > /dev/null 2>&1; then
-            echo "[$(date)] 网络就绪，开始拉取 Hosts..." >> "$LOGFILE"
+            echo "[$(date)] 网络就绪，准备拉取/检查 Hosts..." >> "$LOGFILE"
             return 0
         fi
         sleep 2
         i=$((i + 1))
     done
-    echo "[$(date)] 等待网络超时，将尝试直接运行。" >> "$LOGFILE"
     return 1
 }
 
@@ -62,18 +65,13 @@ update_hosts() {
         fallback_url="https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/fcm_dual.hosts"
     fi
 
-    # 直接输出至模块内 systemless 挂载目录
     local dest_hosts="$MODDIR/system/etc/hosts"
     mkdir -p "$MODDIR/system/etc"
     
     local success=0
-    if curl -sL --connect-timeout 5 -o "${dest_hosts}.tmp" "$primary_url"; then
+    if curl -sL --connect-timeout 5 -o "${dest_hosts}.tmp" "$primary_url" || curl -sL --connect-timeout 10 -o "${dest_hosts}.tmp" "$fallback_url"; then
         success=1
-    elif curl -sL --connect-timeout 10 -o "${dest_hosts}.tmp" "$fallback_url"; then
-        success=1
-    elif wget -T 5 -qO "${dest_hosts}.tmp" "$primary_url"; then
-        success=1
-    elif wget -T 10 -qO "${dest_hosts}.tmp" "$fallback_url"; then
+    elif wget -T 5 -qO "${dest_hosts}.tmp" "$primary_url" || wget -T 10 -qO "${dest_hosts}.tmp" "$fallback_url"; then
         success=1
     fi
 
@@ -81,23 +79,27 @@ update_hosts() {
         mv -f "${dest_hosts}.tmp" "$dest_hosts"
         chmod 644 "$dest_hosts"
         echo "[$(date)] Hosts 成功更新 (模式: $hosts_mode)" >> "$LOGFILE"
-        echo "===================================" >> "$LOGFILE"
-        echo "--- 最新 Hosts 完整内容 ---" >> "$LOGFILE"
-        cat "$dest_hosts" >> "$LOGFILE"
-        echo "===================================" >> "$LOGFILE"
+        
+        # 将完整内容单独写入独立的 hosts.log
+        echo "[$(date)] --- 当前生效的 Hosts 内容 (模式: $hosts_mode) ---" > "$HOSTS_LOG"
+        cat "$dest_hosts" >> "$HOSTS_LOG"
     else
-        echo "[$(date)] Hosts 下载失败或内容不合法，保持系统默认。" >> "$LOGFILE"
+        echo "[$(date)] Hosts 下载失败或内容不合法，若刷入时已下载则继续使用现有版本。" >> "$LOGFILE"
         rm -f "${dest_hosts}.tmp"
+        
+        # 如果已经存在旧的，也记录一下
+        if [ -f "$dest_hosts" ]; then
+            echo "[$(date)] --- 使用模块内已存在的 Hosts 内容 ---" > "$HOSTS_LOG"
+            cat "$dest_hosts" >> "$HOSTS_LOG"
+        fi
     fi
 }
 
 log_fcm_info() {
     echo "===================================" >> "$LOGFILE"
     echo "[$(date)] FCM 状态与诊断截取:" >> "$LOGFILE"
-    
     echo "--- GcmService 核心状态 ---" >> "$LOGFILE"
     dumpsys activity service com.google.android.gms/.gcm.GcmService 2>/dev/null | grep -E -i "connection|endpoint|connected|status|error|network" -A 5 >> "$LOGFILE"
-    
     echo "--- GmsCore Logcat 错误追踪 ---" >> "$LOGFILE"
     logcat -d -s GmsCore GCM FCM | tail -n 30 >> "$LOGFILE"
     echo "===================================" >> "$LOGFILE"
