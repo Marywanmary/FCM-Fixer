@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.6] - 2026-06-12
+### Fixed
+- **修复 Systemless 挂载在开机后期偶发性失效的底层 Bug**：
+  1. 废除了 `common.sh` 内部更新文件时传统的 `mv -f` 指令，完全重构为 `cat >` 覆盖写入流。确保模块内 `hosts` 文件的物理 Inode 节点在运行时绝不发生改变，完美维护了 Magisk/APatch/KernelSU 早期开机时建立的 Systemless 软映射通道。
+  2. 修复了刷入模块时因处于离线状态而无法创建占位符的问题。现在 `customize.sh` 会在安装结束时强制生成一个包含标准回环的 hosts 基础镜像。确保 Root 框架在早起引导阶段能无条件为本模块锁定系统级挂载点。
+  3. 为 `update_hosts` 加入了主动式动态 `bind mount` 注入器，针对系统级挂载异常提供运行期强制兜底。
+
 ## [v1.0.5] - 2026-06-12
 ### Added
 - **真·Hosts 视图反射日志机制**：重构 `hosts.log` 生成逻辑。该文件不再单纯输出模块内部生成的 Hosts 文本，而是跳过所有中间环节，直接对 Android 系统全局运行态的 `/system/etc/hosts` 执行 `cat` 抓取并反射写入日志。同时新增了系统级的 `[挂载检查]` 高亮报警器。当管理器（KernelSU / Magisk / APatch）挂载因系统分区策略失效时，日志会立即打出红色的 `[❌ ERROR]` 警报，成为判定本地挂载状态的绝对事实来源。
