@@ -1,7 +1,7 @@
 SKIPUNZIP=0
 
 ui_print "- 正在安装 FCM Fixer & Hosts Optimizer"
-ui_print "- 版本: v1.0.5 | 作者: ssll"
+ui_print "- 版本: v1.0.6 | 作者: ssll"
 
 ui_print " "
 ui_print "======================================="
@@ -70,6 +70,13 @@ if curl -sL --connect-timeout 5 -o "${dest_hosts}.tmp" "$url" || curl -sL --conn
     fi
 else
     ui_print "- ⚠️ 网络超时，将在开机后由后台服务自动下载。"
+fi
+
+# === 终极修复：无论上面是否下载成功，必须强制生成一个占位 hosts 文件 ===
+# 确保 Root 框架在早起开机时能够正确为该文件创建挂载点并锁定 Inode！
+if [ ! -f "$dest_hosts" ]; then
+    echo -e "127.0.0.1       localhost\n::1             localhost\n# FCM Hosts Placeholder" > "$dest_hosts"
+    chmod 644 "$dest_hosts"
 fi
 
 ui_print "- 安装完成，请重启设备！"
