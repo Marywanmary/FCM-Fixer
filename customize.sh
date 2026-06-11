@@ -12,14 +12,14 @@ ui_print "*****************************************"
 ui_print ""
 
 # ==========================================
-# 2. 交互式菜单 (仅音量键切换，10秒无操作自动确认)
+# 2. 音量键交互菜单 (10 秒无操作自动确认)
 # ==========================================
 ui_print "========================================="
 ui_print "请选择 FCM 网络模式："
 ui_print "[ 1 ] 双栈模式 (Dual-Stack) - 默认"
 ui_print "[ 2 ] 仅 IPv4 (IPv4 Only)"
 ui_print "========================================="
-ui_print "* [音量 + / -] : 切换模式"
+ui_print "* 按 [音量 +/-] 切换选项"
 ui_print "* 停止按键 10 秒后将自动确认当前选项"
 ui_print ""
 
@@ -30,7 +30,7 @@ EVENT_PID=$!
 CHOICE=1
 END_TIME=$(( $(date +%s) + 10 ))
 
-ui_print "-> 当前选择: 模式 $CHOICE (10秒后自动确认)"
+ui_print "-> 当前选择: 模式 $CHOICE (10 秒后自动确认)"
 
 while [ $(date +%s) -lt $END_TIME ]; do
     if [ -s $TMPDIR/events.log ]; then
@@ -44,7 +44,7 @@ while [ $(date +%s) -lt $END_TIME ]; do
                 CHOICE=$((CHOICE - 1))
                 [ $CHOICE -lt 1 ] && CHOICE=2
             fi
-            ui_print "-> 切换至: 模式 $CHOICE (10秒后自动确认)"
+            ui_print "-> 切换至: 模式 $CHOICE (10 秒后自动确认)"
             > $TMPDIR/events.log
             END_TIME=$(( $(date +%s) + 10 ))
             sleep 0.3
@@ -56,10 +56,10 @@ done
 kill $EVENT_PID 2>/dev/null
 rm -f $TMPDIR/events.log
 
-ui_print "- 已自动确认选择！"
+ui_print "- 已确认选择！"
 
 # ==========================================
-# 3. 选择对应的 hosts 文件名及下载源 (仅双栈/IPv4)
+# 3. 配置文件名及下载源
 # ==========================================
 if [ $CHOICE -eq 1 ]; then
   MODE="双栈模式"
@@ -72,14 +72,13 @@ fi
 ui_print ""
 ui_print "- 最终配置: [$MODE]"
 
-# 两个可靠源：官网 + github.boki.moe 反代
 MIRRORS="
 https://fcm-hosts.cagedbird.cn/$FILE
 https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/$FILE
 "
 
 # ==========================================
-# 4. 构建 Systemless Hosts（自动重试）
+# 4. 构建 Systemless Hosts
 # ==========================================
 mkdir -p $MODPATH/system/etc
 echo "127.0.0.1 localhost" > $MODPATH/system/etc/hosts
@@ -87,13 +86,9 @@ echo "::1 ip6-localhost" >> $MODPATH/system/etc/hosts
 echo "" >> $MODPATH/system/etc/hosts
 
 SUCCESS=0
-
 for URL in $MIRRORS; do
     ui_print "- 尝试源: $(echo $URL | awk -F/ '{print $3}')"
-    
-    # 清除上一次可能失败的残留
     sed -i '/google/d' $MODPATH/system/etc/hosts 2>/dev/null
-    
     curl -s -L --connect-timeout 5 --max-time 10 "$URL" >> $MODPATH/system/etc/hosts
     
     if grep -q "google" "$MODPATH/system/etc/hosts"; then
@@ -118,4 +113,4 @@ set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm $MODPATH/service.sh 0 0 0755
 set_perm $MODPATH/system/etc/hosts 0 0 0644
 
-ui_print "- 模块 v1.0.2 安装完成！重启后生效。"
+ui_print "- 模块 v1.0.5 安装完成！重启后生效。"
