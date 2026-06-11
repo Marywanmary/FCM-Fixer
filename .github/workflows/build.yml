@@ -1,0 +1,36 @@
+name: Build Magisk/KernelSU/APatch Module
+
+# 触发条件：当你推送代码到 main 分支，或者发布 tag 时触发
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # 允许在 Actions 页面手动点击运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 读取版本号
+        id: get_version
+        run: |
+          # 从 module.prop 中提取版本号
+          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: 打包为 ZIP 模块
+        run: |
+          # 创建输出目录
+          mkdir -p output
+          # 将根目录下的所有必要文件打包进 ZIP（排除 .git 等无关文件）
+          zip -r9 output/FCM-Fixer-${{ env.VERSION }}.zip . -x "*.git*" -x ".github/*" -x "output/*" -x "*.md"
+
+      - name: 上传构建产物 (Artifact)
+        uses: actions/upload-artifact@v3
+        with:
+          name: FCM-Fixer-Module
+          path: output/*.zip
