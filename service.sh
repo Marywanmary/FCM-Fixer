@@ -2,42 +2,48 @@
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
-# 轮转所有日志
+# 轮转旧日志
 [ -f "$LOGFILE" ] && mv -f "$LOGFILE" "$LOGFILE_OLD"
 [ -f "$HOSTS_LOG" ] && mv -f "$HOSTS_LOG" "$HOSTS_LOG_OLD"
 
-echo "[$(date)] 等待系统启动完成..." > "$LOGFILE"
+# 初始化新日志
+echo -e "\033[1;36m==================== FCM Fixer 服务启动 ====================\033[0m" > "$LOGFILE"
+log_msg INFO "等待系统完全启动 (sys.boot_completed)..."
 
 # 等待系统 UI / 核心服务完全加载完毕
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
 
-echo "[$(date)] 系统已启动，FCM Fixer 开始执行..." >> "$LOGFILE"
+log_msg SUCCESS "系统核心已就绪，FCM 修复流程正式开始..."
 
+# 检查网络并更新 Hosts
 wait_for_network
 update_hosts
 
+# 首次开机清理防火墙
 chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
-
-# 首次清理
-echo "[$(date)] 开始全面清理网络层阻断规则..." >> "$LOGFILE"
+log_msg INFO "开始执行首次开机网络层阻断规则清理..."
 for chain in $chains; do
     remove_block_rules "filter" "$chain" "ipv4"
     remove_block_rules "filter" "$chain" "ipv6"
 done
 
+# 抓取开机初期的 FCM 连接诊断
 log_fcm_info
 
-# 防火墙补充监听机制 (防止系统在网络连通后延迟下发规则)
-# 后台等待 30 秒后进行一次复查
+# 延迟 30 秒补充复查防火墙（应对某些系统开机后期动态补发规则）
 (
     sleep 30
-    echo "[$(date)] 开机 30 秒后复查防火墙规则..." >> "$LOGFILE"
+    log_msg INFO "触发开机 30 秒后期防火墙规则复查..."
     for chain in $chains; do
         remove_block_rules "filter" "$chain" "ipv4"
         remove_block_rules "filter" "$chain" "ipv6"
     done
 ) &
 
-echo "[$(date)] 开机修复与挂载流程初步完成，后台复查进程已启动" >> "$LOGFILE"
+# 启动事件驱动的后台网络状态监视器
+monitor_network_changes &
+
+log_msg SUCCESS "开机初始化流程全部完成，常驻网络监视器已挂载后台。"
+echo -e "\033[1;36m============================================================\033[0m" >> "$LOGFILE"
