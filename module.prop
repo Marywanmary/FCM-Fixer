@@ -1,7 +1,7 @@
 id=fcm-fixer
 name=FCM Fixer & Hosts Optimizer
-version=v1.0.9
-versionCode=9
+version=v1.0.10
+versionCode=10
 author=ssll
-description=解除国产系统（ColorOS等）Google服务防火墙限制，并利用Systemless自动挂载优选FCM Hosts (支持双栈/IPv4)。
+description=解除国产魔改系统对Google服务防火墙限制，并利用Systemless自动挂载优选FCM Hosts (支持双栈/IPv4)。
 updateJson=https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/update.json
