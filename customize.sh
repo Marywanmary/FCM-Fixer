@@ -1,8 +1,7 @@
 SKIPUNZIP=0
 
 ui_print "- 正在安装 FCM Fixer & Hosts Optimizer"
-ui_print "- 作者: ssll"
-ui_print "- 已适配 KernelSU / APatch / Magisk"
+ui_print "- 版本: v1.0.2 | 作者: ssll"
 
 ui_print " "
 ui_print "======================================="
@@ -16,7 +15,6 @@ capture_key() {
     local start=$(date +%s)
     local max_wait=10
     
-    # 后台抓取输入事件
     getevent -ql 2>/dev/null > /dev/.key_events &
     local pid=$!
     
@@ -38,7 +36,6 @@ capture_key() {
 }
 
 mode=$(capture_key)
-
 if [ "$mode" = "ipv4" ]; then
     ui_print "-> 已选择：仅 IPv4"
     echo "ipv4" > "$MODPATH/hosts_mode.conf"
@@ -50,6 +47,31 @@ else
     echo "dual" > "$MODPATH/hosts_mode.conf"
 fi
 
-# 提前创建挂载所需的底层目录，解决system只读问题
+# 提前创建挂载所需的底层目录
 mkdir -p "$MODPATH/system/etc"
-ui_print "- 配置保存完毕，模块生效后将自动更新规则和诊断日志。"
+dest_hosts="$MODPATH/system/etc/hosts"
+
+# 尝试在刷入时直接下载 Hosts 并给出反馈
+ui_print "- 正在尝试下载最新 Hosts..."
+if [ "$mode" = "ipv4" ]; then
+    url="https://fcm-hosts.cagedbird.cn/fcm_ipv4.hosts"
+    fallback="https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/fcm_ipv4.hosts"
+else
+    url="https://fcm-hosts.cagedbird.cn/fcm_dual.hosts"
+    fallback="https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/fcm_dual.hosts"
+fi
+
+if curl -sL --connect-timeout 5 -o "${dest_hosts}.tmp" "$url" || curl -sL --connect-timeout 8 -o "${dest_hosts}.tmp" "$fallback"; then
+    if grep -q -i "google" "${dest_hosts}.tmp" 2>/dev/null; then
+        mv -f "${dest_hosts}.tmp" "$dest_hosts"
+        chmod 644 "$dest_hosts"
+        ui_print "- ✅ Hosts 下载并配置成功！"
+    else
+        rm -f "${dest_hosts}.tmp"
+        ui_print "- ⚠️ Hosts 内容异常，将在开机后重试下载。"
+    fi
+else
+    ui_print "- ⚠️ 网络不通或超时，将在开机后由后台服务自动下载。"
+fi
+
+ui_print "- 安装完成，请重启设备！"
