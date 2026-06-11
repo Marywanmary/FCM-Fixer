@@ -1,32 +1,20 @@
-# FCM-Fixer 更新日志
+# Changelog
 
-## v1.0.11
-- 提供安装调试信息
+All notable changes to this project will be documented in this file.
 
-## v1.0.10
-- 安装时下载hosts，如果失败开机后再次尝试。
+## [v1.0.2] - 2026-06-11
+### Added
+- 刷入过程可视化：在 KernelSU / Magisk / APatch 内安装时，界面会直接显示 Hosts 的下载与配置状态。
+- 独立的 Hosts 日志系统：新增 `hosts.log` 和 `hosts_old.log`，不再与 FCM 状态日志混写，方便直接查看当前生效的节点 IP。
+- 防火墙动态防护机制：增加 `sys.boot_completed` 监听，确保系统启动完毕后再执行清理，并新增 30 秒后的后台二次复查，防止 ColorOS/ZTE 系统在连网后延迟下发 REJECT 规则。
 
-## v1.0.8
-- 重构
+### Changed
+- 升级底层逻辑，全面兼容只读 System 分区（Systemless 挂载机制）。
+- 优化 `common.sh` 中的文件下载回退逻辑 (cURL 超时后自动回退至 wget)。
 
-## v1.0.7
-- 修复音量键无反应的问题。
-- 通过 UID 删除 filter 表出站规则，日志显示更新的 Hosts。
-
-## v1.0.6
-**🔥 重大架构升级：**
-- **智能省电核心：** 放弃高耗电的 5 秒死循环，引入网络指纹 (Gateway + DNS) 探测，仅在网络切换时精准触发清理。
-- **降维打击拦截：** 深度扫描 `filter` 与 `nat` 表，暴力清除魔改系统对 Google 及 FCM 的全量特征拦截与 5228-5230 全局端口阻断。
-- **GMS 状态诊断：** 引入 `netcat` 真实 TCP 握手探测与原生 `dumpsys` GCM 内部转储，排错不再盲人摸象 (日志路径: `/data/adb/box/run/fcm_fixer.log`)。
-- **兼容性重构：** 彻底修复 EROFS 分区挂载时序问题，增强 Android 底层精简环境下的命令鲁棒性。
-- **全系支持：** 完美兼容 Magisk / KernelSU / APatch。
-
-## v1.0.1
-- 优化 Hosts 拉取逻辑，集成多重抗封锁镜像源轮询机制。
-- 调整交互菜单，提升 IPv4 优先级，增加 10 秒无操作自动选择双栈的防呆功能。
-- 增加日志轮替备份机制。
-
-## v1.0.0
-- 初版发布。基于 ColorOS-Google-Firewall-Fixer 融合 fcm-hosts-next 优选规则。
-
-
+## [v1.0.1] - 2026-06-11
+### Added
+- 初始版本发布。
+- 支持通过音量键选择安装 IPv4 优选或双栈 (IPv4/v6) Hosts 模式（默认无操作 10 秒后安装双栈）。
+- 统一日志输出路径至 Box 共享目录 `/data/adb/box/run/fcm_fixer.log`。
+- 添加对开机自动记录 FCM Diagnostic 和 GcmService 连接状态的支持。
