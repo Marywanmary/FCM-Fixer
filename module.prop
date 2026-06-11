@@ -1,6 +1,6 @@
 id=fcm-fixer
 name=FCM-Fixer
-version=v1.0.2
-versionCode=12
+version=v1.0.5
+versionCode=15
 author=Aghu
-description=清理系统底层防火墙拦截规则，双源自动拉取 fcm-hosts 优选节点，10分钟守护防反弹 (兼容 EROFS)。
+description=基于Diagnostics深度优化：网络切换稳定后清理，智能连通性修复，详细诊断日志。支持双栈/仅IPv4，兼容EROFS。
