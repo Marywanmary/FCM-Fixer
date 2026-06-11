@@ -1,4 +1,4 @@
-name: Build Universal Root Module
+name: Build Module
 
 on:
   push:
