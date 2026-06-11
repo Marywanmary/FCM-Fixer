@@ -1,7 +1,7 @@
 SKIPUNZIP=0
 
 ui_print "- 正在安装 FCM Fixer & Hosts Optimizer"
-ui_print "- 版本: v1.0.4 | 作者: ssll"
+ui_print "- 版本: v1.0.5 | 作者: ssll"
 
 ui_print " "
 ui_print "======================================="
