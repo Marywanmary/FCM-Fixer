@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.10] - 2026-06-12
+### Fixed
+- **彻底解决开机早期 DNS 抢跑导致的首次连接未命中问题**：Android 开机机制决定了 GmsCore 发起网络连接的速度通常快于模块框架层执行 Systemless Hosts 挂载的速度，这会导致 FCM 在开机首个长连接中必然使用非优选的默认 IP 且长期被复用。针对该生命周期痛点，现于 `service.sh` 开机 30 秒后的终极复查阶段，加入针对 `com.google.android.gms.persistent` 常驻核心进程的**无感斩断重连机制**。强迫 GMS 丢弃抢跑连接，依据已完美挂载的新 Hosts 发起二次重连，从而确保 FCM 在开机后迅速切入满血优选状态。
+
 ## [v1.0.9] - 2026-06-12
 ### Fixed
 - **剥离双栈套接字伪装映射 (IPv4-mapped)**：修复了 Android 底层内核通过双栈 Socket 发起纯 IPv4 连接时，`ss` 输出地址被强制附加 `::ffff:` 前缀（例如 `::ffff:74.125.20.188`）的现象。该前缀会导致字符串匹配规则失效，产生“连接了优选节点却报错未命中”的假警报。现已引入正则预处理，精准脱去外壳还原真身。
