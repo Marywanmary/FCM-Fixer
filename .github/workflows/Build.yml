@@ -41,7 +41,7 @@ jobs:
           cat <<EOF > update.json
           {
             "version": "${{ env.VERSION }}",
-            "versionCode": ${{ env.VERSION_CODE },
+            "versionCode": ${{ env.VERSION_CODE }},
             "zipUrl": "https://github.boki.moe/https://github.com/Marywanmary/FCM-Fixer/releases/download/${{ env.RELEASE_TAG }}/FCM-Fixer-${{ env.RELEASE_TAG }}.zip",
             "changelog": "https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/CHANGELOG.md"
           }
