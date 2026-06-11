@@ -1,30 +1,47 @@
 #!/system/bin/sh
 
 # ============================================================
-# FCM-Fixer 安装脚本（Magisk / KernelSU / APatch）
-# 所有逻辑内置，避免因 common.sh 缺失导致失败
+# FCM-Fixer 安装脚本（调试版）
+# 每一步都有 ui_print 输出，确保能看到交互和下载过程
 # ============================================================
 
+# 强制设置这些变量（Magisk/KernelSU 标准）
 SKIPUNZIP=1
 SKIPMOUNT=false
 PROPFILE=true
 POSTFSDATA=false
 LATESTARTSERVICE=true
 
-# 检查安装环境
-if [ "$BOOTMODE" != true ]; then
-  abort "❌ 请在 Magisk/KernelSU/APatch Manager 中安装"
-fi
-
-# 创建日志目录并记录
+# 创建日志文件，记录所有输出
 mkdir -p /data/adb/box/run
 LOG_FILE="/data/adb/box/run/fcm_fixer_install.log"
 echo "[$(date)] ========== 安装开始 ==========" > "$LOG_FILE"
+# 将后续所有输出同时写入日志和屏幕（但 ui_print 已经会显示到屏幕，我们重定向标准输出到日志）
 exec >> "$LOG_FILE" 2>&1
 
-# 解压模块文件
-ui_print "- 解压模块文件"
+# 定义一个函数，同时输出到 ui_print 和日志
+log_and_ui() {
+    echo "$1"
+    ui_print "$1"
+}
+
+# 检查环境
+log_and_ui "==========================================="
+log_and_ui "          FCM-Fixer 安装程序"
+log_and_ui "==========================================="
+log_and_ui "• 清理防火墙拦截规则"
+log_and_ui "• 安装优选 FCM Hosts"
+log_and_ui "• 实时监控连接状态"
+log_and_ui "==========================================="
+
+# 解压模块文件（必须）
+log_and_ui "- 解压模块文件"
 unzip -o "$ZIPFILE" -d "$MODPATH" >&2
+if [ $? -ne 0 ]; then
+    log_and_ui "❌ 解压失败！"
+    abort "解压模块文件出错"
+fi
+log_and_ui "✓ 解压完成"
 
 # ---------- 定义下载函数 ----------
 download_hosts() {
@@ -45,25 +62,29 @@ download_hosts() {
     esac
 
     if ! command -v curl >/dev/null 2>&1; then
-        echo "curl 命令不存在，无法下载"
+        log_and_ui "⚠️ curl 命令不存在，无法下载"
         return 1
     fi
 
     for i in 1 2; do
+        log_and_ui "  尝试下载 ($i/2): $url"
         if curl -s -o "$output" -L "$url" 2>/dev/null && [ -s "$output" ]; then
-            echo "下载成功: $url"
+            log_and_ui "  ✓ 下载成功"
             return 0
         fi
         sleep 1
     done
 
+    log_and_ui "  官方地址失败，切换到备用地址"
     for i in 1 2; do
+        log_and_ui "  备用尝试 ($i/2): $fallback"
         if curl -s -o "$output" -L "$fallback" 2>/dev/null && [ -s "$output" ]; then
-            echo "备用地址下载成功: $fallback"
+            log_and_ui "  ✓ 备用地址下载成功"
             return 0
         fi
         sleep 1
     done
+    log_and_ui "  ✗ 下载失败"
     return 1
 }
 
@@ -129,14 +150,14 @@ handle_choice() {
     local choice_no="${3:-否}"
     local timeout_seconds="${4:-10}"
 
-    ui_print " "
-    ui_print "-----------------------------------------------------------"
-    ui_print "- ${question}"
-    ui_print "- [ 音量加(+) ]: ${choice_yes}"
-    ui_print "- [ 音量减(-) ]: ${choice_no}"
-    ui_print "- [ ${timeout_seconds}秒内未选择将默认选择: ${choice_yes} ]"
+    log_and_ui " "
+    log_and_ui "-----------------------------------------------------------"
+    log_and_ui "- ${question}"
+    log_and_ui "- [ 音量加(+) ]: ${choice_yes}"
+    log_and_ui "- [ 音量减(-) ]: ${choice_no}"
+    log_and_ui "- [ ${timeout_seconds}秒内未选择将默认选择: ${choice_yes} ]"
 
-    # 预热 getevent
+    # 预热 getevent（确保设备可用）
     timeout 0.1 getevent -c 1 >/dev/null 2>&1
 
     start_key_listener
@@ -145,69 +166,59 @@ handle_choice() {
     stop_key_listener
     
     if [ "$result" -eq 0 ]; then
-        ui_print "  => 您选择了: ${choice_yes}"
+        log_and_ui "  => 您选择了: ${choice_yes}"
         return 0
     elif [ "$result" -eq 1 ]; then
-        ui_print "  => 您选择了: ${choice_no}"
+        log_and_ui "  => 您选择了: ${choice_no}"
         return 1
     else
-        ui_print "  => 超时未选择，默认选择: ${choice_yes}"
+        log_and_ui "  => 超时未选择，默认选择: ${choice_yes}"
         return 0
     fi
 }
 
-# ---------- 主安装流程 ----------
-ui_print "==========================================="
-ui_print "          FCM-Fixer 模块安装程序"
-ui_print "==========================================="
-ui_print "  • 清理防火墙拦截规则"
-ui_print "  • 安装优选 FCM Hosts"
-ui_print "  • 实时监控连接状态"
-ui_print "==========================================="
-
-# 选择 hosts 类型
+# ---------- 选择 hosts 类型 ----------
+log_and_ui "开始交互选择..."
 if handle_choice "请选择要安装的 Hosts 类型：" "双栈 hosts (IPv4+IPv6，推荐)" "仅 IPv4 hosts"; then
     HOSTS_TYPE="dual"
 else
     HOSTS_TYPE="ipv4"
 fi
-
+log_and_ui "✅ 已选择: $HOSTS_TYPE"
 echo "$HOSTS_TYPE" > /data/adb/box/run/hosts_choice
-ui_print "✅ 已选择: $HOSTS_TYPE"
 
-# 下载 hosts 到模块目录
-ui_print "📥 正在下载 hosts 文件..."
+# ---------- 下载 hosts 到模块目录 ----------
+log_and_ui "📥 正在下载 hosts 文件..."
 TEMP_HOSTS="/data/local/tmp/fcm_hosts_${HOSTS_TYPE}.tmp"
 if download_hosts "$HOSTS_TYPE" "$TEMP_HOSTS"; then
-    # 创建模块内 system/etc 目录
     mkdir -p "$MODPATH/system/etc"
     cp -f "$TEMP_HOSTS" "$MODPATH/system/etc/hosts"
     chmod 644 "$MODPATH/system/etc/hosts"
     rm -f "$TEMP_HOSTS"
     touch "$MODPATH/.hosts_installed"
-    ui_print "✅ Hosts 下载成功"
+    log_and_ui "✅ Hosts 安装成功"
     # 显示前5行预览
-    ui_print "--- hosts 内容预览（前5行） ---"
+    log_and_ui "--- hosts 内容预览（前5行） ---"
     head -5 "$MODPATH/system/etc/hosts" | while read line; do
-        ui_print "  $line"
+        log_and_ui "  $line"
     done
 else
-    ui_print "⚠️  Hosts 下载失败（网络问题或 curl 不可用）"
-    ui_print "   您可以在开机后执行以下命令手动重试："
-    ui_print "   su -c /data/adb/modules/fcm-fixer/action.sh --hosts"
+    log_and_ui "⚠️  Hosts 下载失败（网络问题或 curl 不可用）"
+    log_and_ui "   您可以在开机后执行以下命令手动重试："
+    log_and_ui "   su -c /data/adb/modules/fcm-fixer/action.sh --hosts"
 fi
 
-# 设置权限
-ui_print "- 设置权限"
+# ---------- 设置权限 ----------
+log_and_ui "- 设置权限"
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm $MODPATH/system/etc/hosts 0 0 0644 2>/dev/null
 
-# 完成
-ui_print "==========================================="
-ui_print "✅ FCM-Fixer 安装完成"
-ui_print "📁 日志目录: /data/adb/box/run/"
-ui_print "🔄 请重启手机以生效"
-ui_print "==========================================="
+# ---------- 完成 ----------
+log_and_ui "==========================================="
+log_and_ui "✅ FCM-Fixer 安装完成"
+log_and_ui "📁 日志目录: /data/adb/box/run/"
+log_and_ui "🔄 请重启手机以生效"
+log_and_ui "==========================================="
 
-# 确保安装成功退出
+# 确保以成功状态退出
 exit 0
