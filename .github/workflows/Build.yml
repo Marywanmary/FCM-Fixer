@@ -13,7 +13,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TZ: Asia/Shanghai # 强制使用中国标准时间 (CST)，解决服务器时区死死停在UTC昨天的Bug
     permissions:
       contents: write
 
@@ -26,10 +26,12 @@ jobs:
       - name: 读取版本信息并生成带日期的标签
         id: get_info
         run: |
-          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
+          # 提取版本号并利用 sed 自动过滤掉可能自带的 'v' 或 'V' 前缀，防止双重 'v' (如 vv1.0.4)
+          VERSION=$(grep '^version=' module.prop | cut -d'=' -f2 | sed 's/^[vV]//')
           VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
           DATE=$(date +'%Y%m%d')
-          # 统一 release 标签格式：v1.0.4-20260612
+          
+          # 统一规范化 release 标签格式
           RELEASE_TAG="v${VERSION}-${DATE}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
@@ -40,7 +42,7 @@ jobs:
         run: |
           cat <<EOF > update.json
           {
-            "version": "${{ env.VERSION }}",
+            "version": "v${{ env.VERSION }}",
             "versionCode": ${{ env.VERSION_CODE }},
             "zipUrl": "https://github.boki.moe/https://github.com/Marywanmary/FCM-Fixer/releases/download/${{ env.RELEASE_TAG }}/FCM-Fixer-${{ env.RELEASE_TAG }}.zip",
             "changelog": "https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/CHANGELOG.md"
@@ -70,7 +72,7 @@ jobs:
           name: FCM-Fixer ${{ env.RELEASE_TAG }}
           body: |
             ### 🚀 FCM-Fixer 自动化构建更新
-            - **构建版本**：${{ env.VERSION }} (${{ env.VERSION_CODE }})
+            - **构建版本**：v${{ env.VERSION }} (${{ env.VERSION_CODE }})
             - **构建日期**：${{ env.DATE }}
             - **框架支持**：Magisk / KernelSU / APatch (Systemless 挂载)
             
