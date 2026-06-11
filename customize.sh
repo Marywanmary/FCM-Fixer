@@ -1,10 +1,6 @@
 #!/system/bin/sh
 
-# ============================================================
-# FCM-Fixer 安装脚本（Magisk / KernelSU / APatch）
-# 功能：音量键选择 hosts 类型，立即下载到模块目录
-# ============================================================
-
+# 设置环境变量
 SKIPUNZIP=1
 SKIPMOUNT=false
 PROPFILE=true
@@ -13,33 +9,34 @@ LATESTARTSERVICE=true
 
 # 检查安装环境
 if [ "$BOOTMODE" != true ]; then
-  abort "❌ 请在 Magisk/KernelSU/APatch Manager 中安装，不支持 Recovery 模式"
+  abort "❌ 请在 Magisk/KernelSU/APatch Manager 中安装"
 fi
 
-# 加载公共函数（此时 common.sh 在同目录）
-. ${0%/*}/common.sh
+# 创建日志目录
+mkdir -p /data/adb/box/run
+LOG_FILE="/data/adb/box/run/fcm_fixer_install.log"
+echo "[$(date)] ========== 安装开始 ==========" > "$LOG_FILE"
 
-# 确保日志目录存在
-init_log_dir
+# 加载公共函数（此时模块文件尚未解压，需要先解压 common.sh 和 module.prop 等）
+# 由于 SKIPUNZIP=1，我们需要手动解压必要文件
+unzip -o "$ZIPFILE" -d "$MODPATH" >&2
 
-# 清空或创建安装日志
-echo "[$(date)] ========== FCM-Fixer 安装开始 ==========" > "$INSTALL_LOG"
+# 加载 common.sh
+if [ -f "$MODPATH/common.sh" ]; then
+    . $MODPATH/common.sh
+else
+    echo "[$(date)] 错误：无法找到 common.sh" >> "$LOG_FILE"
+    abort "模块文件不完整"
+fi
 
-# 显示欢迎信息
-ui_print "==========================================="
-ui_print "          FCM-Fixer 模块安装程序"
-ui_print "==========================================="
-ui_print "  • 清理防火墙拦截规则"
-ui_print "  • 安装优选 FCM Hosts"
-ui_print "  • 实时监控连接状态"
-ui_print "==========================================="
-
-# ---------- 音量键检测函数（完全参考 Box 模块）----------
+# ---------- 音量键检测（参考 Box 实现）----------
 KEY_LISTENER_PID=""
 KEY_FIFO=""
 
 start_key_listener() {
-    [ -n "$KEY_LISTENER_PID" ] && kill -0 "$KEY_LISTENER_PID" 2>/dev/null && return
+    if [ -n "$KEY_LISTENER_PID" ] && kill -0 "$KEY_LISTENER_PID" 2>/dev/null; then
+        return
+    fi
     KEY_FIFO=$(mktemp -u -p /dev/tmp)
     mkfifo "$KEY_FIFO" || exit 1
     getevent -ql > "$KEY_FIFO" &
@@ -47,15 +44,20 @@ start_key_listener() {
 }
 
 stop_key_listener() {
-    [ -n "$KEY_LISTENER_PID" ] && kill "$KEY_LISTENER_PID" 2>/dev/null
-    [ -n "$KEY_FIFO" ] && rm -f "$KEY_FIFO"
-    KEY_LISTENER_PID=""
-    KEY_FIFO=""
+    if [ -n "$KEY_LISTENER_PID" ]; then
+        kill "$KEY_LISTENER_PID" >/dev/null 2>&1
+        KEY_LISTENER_PID=""
+    fi
+    if [ -n "$KEY_FIFO" ]; then
+        rm -f "$KEY_FIFO"
+        KEY_FIFO=""
+    fi
 }
 
 volume_key_detection() {
     local timeout_seconds="${1:-0}"
     local detection_result_file=$(mktemp -u -p /dev/tmp)
+    
     (
         while read -r line; do
             if echo "$line" | grep -Eiq "(KEY_)?VOLUME ?UP|KEYCODE_VOLUME_UP" && echo "$line" | grep -Eiq "DOWN|PRESS"; then
@@ -72,11 +74,16 @@ volume_key_detection() {
     if [ "$timeout_seconds" -gt 0 ]; then
         (
             sleep "$timeout_seconds"
-            kill -0 "$detection_pid" 2>/dev/null && kill "$detection_pid" 2>/dev/null && echo "2" > "$detection_result_file"
+            if kill -0 "$detection_pid" 2>/dev/null; then
+                kill "$detection_pid" 2>/dev/null
+                echo "2" > "$detection_result_file"
+            fi
         ) &
         local timeout_pid=$!
+        
         wait "$detection_pid" 2>/dev/null
         kill "$timeout_pid" 2>/dev/null
+        wait "$timeout_pid" 2>/dev/null
     else
         wait "$detection_pid" 2>/dev/null
     fi
@@ -86,6 +93,7 @@ volume_key_detection() {
         rm -f "$detection_result_file"
         return "$result"
     fi
+    
     rm -f "$detection_result_file"
     return 2
 }
@@ -122,52 +130,37 @@ handle_choice() {
     fi
 }
 
-# ---------- 交互选择 hosts 类型 ----------
+# ---------- 交互选择 ----------
+ui_print "==========================================="
+ui_print "          FCM-Fixer 模块安装程序"
+ui_print "==========================================="
+
 if handle_choice "请选择要安装的 Hosts 类型：" "双栈 hosts (IPv4+IPv6，推荐)" "仅 IPv4 hosts"; then
     HOSTS_TYPE="dual"
 else
     HOSTS_TYPE="ipv4"
 fi
 
-# 记录用户选择（供开机后使用，例如重新下载或日志）
-echo "$HOSTS_TYPE" > "$HOSTS_CHOICE_FILE"
-log_install "用户选择: $HOSTS_TYPE"
+echo "$HOSTS_TYPE" > /data/adb/box/run/hosts_choice
+ui_print "✅ 已选择: $HOSTS_TYPE"
 
-# ---------- 立即下载 hosts 到模块目录 ----------
-# 注意：此时 MODPATH 是模块临时目录，安装完成后会被复制到 /data/adb/modules/fcm-fixer/
-log_install "开始下载 hosts 文件..."
+# ---------- 尝试下载 hosts ----------
+ui_print "📥 正在下载 hosts 文件..."
 if install_hosts_to_module "$HOSTS_TYPE" "$MODPATH"; then
-    touch "${MODPATH}/.hosts_installed"
-    log_install "✅ Hosts 下载并安装成功"
+    touch "$MODPATH/.hosts_installed"
+    ui_print "✅ Hosts 下载成功"
 else
-    log_install "⚠️ Hosts 下载失败，模块仍将继续安装"
-    log_install "   您可以在重启后执行以下命令手动重试："
-    log_install "   su -c /data/adb/modules/fcm-fixer/action.sh --hosts"
+    ui_print "⚠️ Hosts 下载失败（网络问题或curl不可用）"
+    ui_print "   您可以在开机后执行以下命令手动重试："
+    ui_print "   su -c /data/adb/modules/fcm-fixer/action.sh --hosts"
 fi
 
-# ---------- 释放模块其他文件 ----------
-ui_print "📦 正在释放模块文件..."
-unzip -o "$ZIPFILE" -d "$MODPATH" >&2
-
-# 创建模块内的 system/etc 目录（确保存在，尽管 install_hosts_to_module 已创建）
-mkdir -p "${MODPATH}/system/etc"
-
-# 设置权限
+# ---------- 设置权限 ----------
 set_perm_recursive $MODPATH 0 0 0755 0644
 set_perm $MODPATH/system/etc/hosts 0 0 0644 2>/dev/null
 
-# 完成提示
-ui_print " "
-ui_print "==========================================="
-ui_print "✅ FCM-Fixer 安装完成"
-if [ -f "${MODPATH}/.hosts_installed" ]; then
-    ui_print "📁 Hosts 已安装，重启后立即生效"
-else
-    ui_print "⚠️  Hosts 下载失败，请参阅上述提示手动重试"
-fi
-ui_print "📁 日志目录: /data/adb/box/run/"
-ui_print "🔄 请重启手机以完成设置"
-ui_print "==========================================="
+ui_print "✅ 安装完成，请重启手机"
+ui_print "📁 日志位置: /data/adb/box/run/"
 
-# 记录安装结束
-log_install "========== 安装结束 =========="
+# 确保安装成功退出
+exit 0
