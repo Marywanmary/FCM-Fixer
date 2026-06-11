@@ -1,7 +1,7 @@
 id=fcm-fixer
 name=FCM-Fixer
-version=1.0.10
-versionCode=0110
+version=1.0.11
+versionCode=0111
 author=ssll
 description=清理系统底层防火墙拦截规则，并结合 fcm-hosts-next 官方源动态拉取优选 Hosts，提供更稳定的 FCM 长连接入口（兼容 EROFS）。
 updateJson=https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/update.json
