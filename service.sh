@@ -2,48 +2,55 @@
 MODDIR=${0%/*}
 . "$MODDIR/common.sh"
 
-# 轮转旧日志
-[ -f "$LOGFILE" ] && mv -f "$LOGFILE" "$LOGFILE_OLD"
-[ -f "$HOSTS_LOG" ] && mv -f "$HOSTS_LOG" "$HOSTS_LOG_OLD"
+# 轮转旧日志（基于规范后的持久化目录操作）
+[ -f "$MASTER_LOG" ] && mv -f "$MASTER_LOG" "$MASTER_LOG_OLD"
+[ -f "$MASTER_HOSTS" ] && mv -f "$MASTER_HOSTS" "$MASTER_HOSTS_OLD"
 
-# 初始化新日志
-echo -e "\033[1;36m==================== FCM Fixer 服务启动 ====================\033[0m" > "$LOGFILE"
-log_msg INFO "等待系统完全启动 (sys.boot_completed)..."
+# 初始化全新日志
+echo -e "\033[1;36m==================== FCM Fixer 服务启动 ====================\033[0m" > "$MASTER_LOG"
+sync_to_box
 
-# 等待系统 UI / 核心服务完全加载完毕
-while [ "$(getprop sys.boot_completed)" != "1" ]; do
-    sleep 2
-done
-
-log_msg SUCCESS "系统核心已就绪，FCM 修复流程正式开始..."
-
-# 检查网络并更新 Hosts
-wait_for_network
-update_hosts
-
-# 首次开机清理防火墙
+# 【第一阶段：紧急早期清理】
+log_msg INFO "执行【第一阶段】开机极早期防火墙紧急盲删清理..."
 chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
-log_msg INFO "开始执行首次开机网络层阻断规则清理..."
 for chain in $chains; do
     remove_block_rules "filter" "$chain" "ipv4"
     remove_block_rules "filter" "$chain" "ipv6"
 done
 
-# 抓取开机初期的 FCM 连接诊断
-log_fcm_info
-
-# 延迟 30 秒补充复查防火墙（应对某些系统开机后期动态补发规则）
+# 【第二阶段：常驻引导服务后台拉起】
 (
-    sleep 30
-    log_msg INFO "触发开机 30 秒后期防火墙规则复查..."
+    log_msg INFO "常驻引导进线程已进入后台，等待系统完全就绪 (sys.boot_completed)..."
+    while [ "$(getprop sys.boot_completed)" != "1" ]; do
+        sleep 2
+    done
+
+    log_msg SUCCESS "系统核心已完全就绪，启动【第二阶段】托管流程..."
+
+    wait_for_network
+    update_hosts
+
+    log_msg INFO "执行开机后期防火墙规则二次复查清理..."
     for chain in $chains; do
         remove_block_rules "filter" "$chain" "ipv4"
         remove_block_rules "filter" "$chain" "ipv6"
     done
+
+    log_fcm_info
+    track_fcm_hits_loop &
+
+    (
+        sleep 30
+        log_msg INFO "触发开机 30 秒整终极防补发规则复查..."
+        for chain in $chains; do
+            remove_block_rules "filter" "$chain" "ipv4"
+            remove_block_rules "filter" "$chain" "ipv6"
+        done
+    ) &
+
+    monitor_network_changes &
+
+    log_msg SUCCESS "开机初始化引导全部安全交割，后台常驻进程正常工作。"
+    echo -e "\033[1;32m============================================================\033[0m" >> "$MASTER_LOG"
+    sync_to_box
 ) &
-
-# 启动事件驱动的后台网络状态监视器
-monitor_network_changes &
-
-log_msg SUCCESS "开机初始化流程全部完成，常驻网络监视器已挂载后台。"
-echo -e "\033[1;36m============================================================\033[0m" >> "$LOGFILE"
