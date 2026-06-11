@@ -1,141 +1,105 @@
 #!/system/bin/sh
 
-MODDIR=${0%/*}
-VERSION=$(grep '^version=' $MODDIR/module.prop 2>/dev/null | cut -d'=' -f2)
-[ -z "$VERSION" ] && VERSION="未知版本"
+# ============================================================
+# FCM-Fixer 启动脚本
+# 执行顺序：
+#   1. 等待系统启动完成
+#   2. 清理防火墙中的 REJECT/DROP 规则
+#   3. 安装优选 Hosts（首次运行或手动触发）
+#   4. 启动 FCM 诊断监控
+# ============================================================
 
-LOGDIR=/data/adb/box/run
-mkdir -p $LOGDIR 2>/dev/null
-[ ! -d $LOGDIR ] && LOGDIR=/data/local/tmp
+# 等待 Android 系统完全启动
+until [ $(getprop sys.boot_completed) -eq 1 ]; do
+    sleep 2
+done
 
-LOGFILE="$LOGDIR/fcm_fixer.log"
-OLDLOG="$LOGDIR/fcm_fixer_old.log"
+# 额外等待 60 秒，确保系统 iptables 规则加载完毕
+sleep 60
 
+# 加载核心函数库
+SCRIPT_DIR=${0%/*}
+. ${SCRIPT_DIR}/common.sh
+
+# ---------- 日志初始化 ----------
 if [ -f "$LOGFILE" ]; then
-    mv -f "$LOGFILE" "$OLDLOG"
+    cp -f "$LOGFILE" "$BAKLOG"
+    echo "[$(date)] ========== 新会话开始 ==========" > "$LOGFILE"
+else
+    echo "[$(date)] ========== 首次运行 ==========" > "$LOGFILE"
 fi
-echo "=== FCM-Fixer Service $VERSION 启动于 $(date '+%Y-%m-%d %H:%M:%S') ===" > $LOGFILE
 
-while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done
-echo "[INFO] 系统启动完成，等待 30 秒让网络和防火墙就绪..." >> $LOGFILE
-sleep 30
+# 轮转 FCM 日志（与 Box 共享目录）
+rotate_fcm_log
 
-get_uid() {
-    cat /data/system/packages.list 2>/dev/null | grep "^$1 " | awk '{print $2}'
-}
+# ---------- 清理防火墙规则 ----------
+chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
+echo "[$(date)] 开始清理防火墙中的 REJECT/DROP 规则..." >> "$LOGFILE"
 
-GMS_UID=""
-while [ -z "$GMS_UID" ]; do
-    GMS_UID=$(get_uid "com.google.android.gms")
-    [ -z "$GMS_UID" ] && sleep 5
+for chain in $chains; do
+    remove_block_rules "filter" "$chain" "ipv4"
+    remove_block_rules "filter" "$chain" "ipv6"
 done
 
-VENDING_UID=$(get_uid "com.android.vending")
-GSF_UID=$(get_uid "com.google.android.gsf")
+echo "[$(date)] 防火墙规则清理完成" >> "$LOGFILE"
 
-echo "[INFO] 目标 UID: GMS=$GMS_UID, Play=$VENDING_UID, GSF=$GSF_UID" >> $LOGFILE
+# ---------- 安装 Hosts（仅首次执行）----------
+# 通过标志文件 .hosts_installed 判断是否已安装
+# 如需重新安装，删除该标志文件或执行 action.sh --hosts
+HOSTS_INSTALLED_FLAG="${SCRIPT_DIR}/.hosts_installed"
+HOSTS_TYPE_FLAG="${SCRIPT_DIR}/.hosts_type"
 
-get_network_type() {
-    local iface=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p')
-    if echo "$iface" | grep -qE 'wlan|wifi'; then
-        echo "WiFi"
-    elif echo "$iface" | grep -qE 'rmnet|ccmni|wwan|cell'; then
-        echo "Cell"
-    elif [ -n "$iface" ]; then
-        echo "Other($iface)"
-    else
-        echo "Disconnected"
-    fi
-}
-
-# ==========================================
-# 严格还原：仅清理指定 UID 的 filter 表规则
-# ==========================================
-clean_uid_rules() {
-    local uid=$1
-    local name=$2
-    [ -z "$uid" ] && return
+if [ ! -f "$HOSTS_INSTALLED_FLAG" ]; then
+    echo "[$(date)] 首次运行，开始安装优选 Hosts..." >> "$LOGFILE"
     
-    for action in REJECT DROP; do
-        iptables -t filter -D OUTPUT -m owner --uid-owner $uid -j $action >/dev/null 2>&1 && \
-            echo "[$(date '+%m-%d %H:%M:%S')] 放行: 移除 $name IPv4 $action" >> $LOGFILE
-        ip6tables -t filter -D OUTPUT -m owner --uid-owner $uid -j $action >/dev/null 2>&1 && \
-            echo "[$(date '+%m-%d %H:%M:%S')] 放行: 移除 $name IPv6 $action" >> $LOGFILE
-    done
-}
-
-check_and_fix_hosts() {
-    echo "[$(date '+%m-%d %H:%M:%S')] 执行 Hosts 挂载检查..." >> $LOGFILE
-    if ! grep -q "mtalk.google.com" /system/etc/hosts; then
-        mount --bind $MODDIR/system/etc/hosts /system/etc/hosts 2>/dev/null
-    fi
+    # 等待音量键选择
+    wait_for_volume_key
+    choice=$?
     
-    # 将实际生效的 Hosts 内容打印到日志供用户核对
-    echo "--- ⬇️ 当前生效的 Hosts 规则 ⬇️ ---" >> $LOGFILE
-    cat /system/etc/hosts | grep -v "^#" | grep -v "^$" >> $LOGFILE
-    echo "-------------------------------------" >> $LOGFILE
-}
-
-dump_fcm_diagnostics() {
-    echo "[$(date '+%m-%d %H:%M:%S')] >>> GMS 内部 FCM 诊断日志 (前30行) >>>" >> $LOGFILE
-    # 去掉所有 grep 过滤，直接抓取前30行原生输出，确保不漏信息
-    dumpsys activity service com.google.android.gms/.gcm.GcmService 2>/dev/null | head -n 30 >> $LOGFILE
-    echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" >> $LOGFILE
-}
-
-fcm_diag() {
-    if nc -z -w 2 mtalk.google.com 5228 2>/dev/null; then
-        echo "[$(date '+%m-%d %H:%M:%S')] 连通性测试: 成功 (TCP 5228 直连)" >> $LOGFILE
-        return 0
+    case $choice in
+        1)
+            install_hosts "dual"
+            if [ $? -eq 0 ]; then
+                touch "$HOSTS_INSTALLED_FLAG"
+                echo "dual" > "$HOSTS_TYPE_FLAG"
+                echo "[$(date)] ✓ 双栈 hosts 安装成功" >> "$LOGFILE"
+            else
+                echo "[$(date)] ✗ 双栈 hosts 安装失败" >> "$LOGFILE"
+            fi
+            ;;
+        2)
+            install_hosts "ipv4"
+            if [ $? -eq 0 ]; then
+                touch "$HOSTS_INSTALLED_FLAG"
+                echo "ipv4" > "$HOSTS_TYPE_FLAG"
+                echo "[$(date)] ✓ IPv4 hosts 安装成功" >> "$LOGFILE"
+            else
+                echo "[$(date)] ✗ IPv4 hosts 安装失败" >> "$LOGFILE"
+            fi
+            ;;
+        *)
+            # 超时或出错，默认安装双栈
+            install_hosts "dual"
+            if [ $? -eq 0 ]; then
+                touch "$HOSTS_INSTALLED_FLAG"
+                echo "dual" > "$HOSTS_TYPE_FLAG"
+                echo "[$(date)] ✓ 默认安装双栈 hosts 成功" >> "$LOGFILE"
+            else
+                echo "[$(date)] ✗ 默认安装双栈 hosts 失败" >> "$LOGFILE"
+            fi
+            ;;
+    esac
+else
+    # 已安装过 hosts，显示当前使用的类型
+    if [ -f "$HOSTS_TYPE_FLAG" ]; then
+        current_type=$(cat "$HOSTS_TYPE_FLAG")
+        echo "[$(date)] Hosts 已安装（类型: $current_type），跳过安装" >> "$LOGFILE"
     else
-        echo "[$(date '+%m-%d %H:%M:%S')] 连通性测试: 失败 (TCP 5228 不可达)" >> $LOGFILE
-        dump_fcm_diagnostics
-        return 1
+        echo "[$(date)] Hosts 已安装，跳过安装" >> "$LOGFILE"
     fi
-}
+fi
 
-get_network_fingerprint() {
-    local gw=$(ip route get 1.1.1.1 2>/dev/null | head -1 | awk '{print $3}')
-    local dns1=$(getprop net.dns1)
-    local dns2=$(getprop net.dns2)
-    echo "${gw}_${dns1}_${dns2}"
-}
+# ---------- 启动 FCM 监控 ----------
+start_fcm_monitor
 
-full_clean_and_verify() {
-    echo "[$(date '+%m-%d %H:%M:%S')] 执行清理流程..." >> $LOGFILE
-    clean_uid_rules "$GMS_UID" "GMS"
-    clean_uid_rules "$VENDING_UID" "Play商店"
-    clean_uid_rules "$GSF_UID" "GSF"
-    check_and_fix_hosts
-    fcm_diag
-}
-
-echo "[INFO] 开始初次防火墙清理，当前网络: $(get_network_type)" >> $LOGFILE
-full_clean_and_verify
-
-LAST_FINGERPRINT=$(get_network_fingerprint)
-LAST_CONN_CHECK=$(date +%s)
-
-echo "[INFO] 进入守护循环 (网络变化清理 + 10分钟探测)" >> $LOGFILE
-
-while true; do
-    CURRENT_FP=$(get_network_fingerprint)
-    if [ "$CURRENT_FP" != "$LAST_FINGERPRINT" ] && [ -n "$CURRENT_FP" ]; then
-        echo "[$(date '+%m-%d %H:%M:%S')] 切换至 $(get_network_type)，等待 5 秒..." >> $LOGFILE
-        sleep 5
-        full_clean_and_verify
-        LAST_FINGERPRINT="$CURRENT_FP"
-        LAST_CONN_CHECK=$(date +%s)
-    fi
-
-    NOW=$(date +%s)
-    if [ $((NOW - LAST_CONN_CHECK)) -ge 600 ]; then
-        echo "[$(date '+%m-%d %H:%M:%S')] 10分钟定时健康检查 (网络: $(get_network_type))" >> $LOGFILE
-        if ! fcm_diag; then
-            full_clean_and_verify
-        fi
-        LAST_CONN_CHECK=$NOW
-    fi
-
-    sleep 10
-done
+echo "[$(date)] ========== service.sh 执行完成 ==========" >> "$LOGFILE"
