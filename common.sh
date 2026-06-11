@@ -1,77 +1,3 @@
-#!/system/bin/sh
-MODDIR=${0%/*}
-
-BOX_RUN_DIR="/data/adb/box/run"
-mkdir -p "$BOX_RUN_DIR"
-
-LOGFILE="$BOX_RUN_DIR/fcm_fixer.log"
-LOGFILE_OLD="$BOX_RUN_DIR/fcm_fixer_old.log"
-HOSTS_LOG="$BOX_RUN_DIR/hosts.log"
-HOSTS_LOG_OLD="$BOX_RUN_DIR/hosts_old.log"
-
-# 全新日志输出系统 (时间 + 分级 + 颜色)
-log_msg() {
-    local level="$1"
-    local msg="$2"
-    local time_str=$(date "+%Y-%m-%d %H:%M:%S")
-    
-    local C_RESET="\033[0m"
-    local C_INFO="\033[36m"    # 青色
-    local C_WARN="\033[33m"    # 黄色
-    local C_ERROR="\033[31m"   # 红色
-    local C_SUCC="\033[1;32m"  # 粗体绿色
-    local C_HIGH="\033[1;35m"  # 粗体洋红色
-
-    case "$level" in
-        INFO)    printf "${C_INFO}[%s] [ℹ️ INFO] %s${C_RESET}\n" "$time_str" "$msg" >> "$LOGFILE" ;;
-        WARN)    printf "${C_WARN}[%s] [⚠️ WARN] %s${C_RESET}\n" "$time_str" "$msg" >> "$LOGFILE" ;;
-        ERROR)   printf "${C_ERROR}[%s] [❌ ERROR] %s${C_RESET}\n" "$time_str" "$msg" >> "$LOGFILE" ;;
-        SUCCESS) printf "${C_SUCC}[%s] [✅ SUCC] %s${C_RESET}\n" "$time_str" "$msg" >> "$LOGFILE" ;;
-        MATCH)   printf "${C_HIGH}[%s] [🎯 MATCH] %s${C_RESET}\n" "$time_str" "$msg" >> "$LOGFILE" ;;
-        *)       printf "${C_RESET}[%s] [%s] %s${C_RESET}\n" "$time_str" "$level" "$msg" >> "$LOGFILE" ;;
-    esac
-}
-
-remove_block_rules() {
-    local table="${1:-filter}"
-    local chain="$2"
-    local proto="${3:-ipv4}"
-    local cmd=""
-
-    case "$proto" in
-        ipv4) cmd="iptables" ;;
-        ipv6) cmd="ip6tables" ;;
-        *) log_msg ERROR "不支持的协议 $proto"; return 1 ;;
-    esac
-
-    if ! command -v "$cmd" > /dev/null 2>&1; then return 0; fi
-
-    local line_numbers=$( $cmd -t "$table" -nvL "$chain" --line-numbers 2> /dev/null | awk '/REJECT|DROP/ {print $1}' | sort -rn )
-    if [ -z "$line_numbers" ]; then return 0; fi
-
-    local deleted_count=0
-    for line_num in $line_numbers; do
-        if $cmd -t "$table" -D "$chain" "$line_num" 2> /dev/null; then
-            deleted_count=$((deleted_count + 1))
-        fi
-    done
-    log_msg SUCCESS "$proto: $chain 链成功清理了 ${deleted_count} 条阻断规则"
-}
-
-wait_for_network() {
-    local i=0
-    while [ $i -lt 30 ]; do
-        if ping -c 1 -W 1 223.5.5.5 > /dev/null 2>&1; then
-            log_msg INFO "网络就绪，准备拉取/检查 Hosts..."
-            return 0
-        fi
-        sleep 2
-        i=$((i + 1))
-    done
-    log_msg WARN "等待网络超时，将继续执行后续逻辑。"
-    return 1
-}
-
 update_hosts() {
     local hosts_mode="dual"
     [ -f "$MODDIR/hosts_mode.conf" ] && hosts_mode=$(cat "$MODDIR/hosts_mode.conf")
@@ -98,147 +24,35 @@ update_hosts() {
     fi
 
     if [ $success -eq 1 ] && grep -q -i "google" "${dest_hosts}.tmp" 2>/dev/null; then
-        mv -f "${dest_hosts}.tmp" "$dest_hosts"
+        # ========================================================
+        # 核心修复 1：摒弃 mv -f，改用 cat 重写内容！
+        # 保持文件 Inode 绝对不变，从而让开机早期的 Systemless 挂载映射关系依然完好生效
+        # ========================================================
+        cat "${dest_hosts}.tmp" > "$dest_hosts"
         chmod 644 "$dest_hosts"
+        rm -f "${dest_hosts}.tmp"
         log_msg SUCCESS "Hosts 成功从远端下载并写入模块目录"
+        
+        # 核心修复 2：运行时强行追加物理 bind mount，防止某些极端的固件中途卸载挂载
+        mount -o bind "$dest_hosts" /system/etc/hosts 2>/dev/null
     else
         log_msg ERROR "Hosts 下载失败或内容不合法，若存在旧配置则保持使用。"
         rm -f "${dest_hosts}.tmp"
     fi
 
-    # 直接镜像系统真实生效视图，作为挂载成功与否的终极铁证
+    # 运行时直接镜像全局真实视图，作为挂载检验的唯一真理来源
     echo "[$(date "+%Y-%m-%d %H:%M:%S")] --- 当前 Android 系统真实生效的 /system/etc/hosts 视图 ---" > "$HOSTS_LOG"
     if grep -q "google" /system/etc/hosts 2>/dev/null; then
         log_msg SUCCESS "[挂载检查] 恭喜！检测到系统全局 /system/etc/hosts 已成功并入优选规则！"
     else
         log_msg ERROR "[挂载检查] 警报！系统全局 /system/etc/hosts 未发现优选规则，模块 Systemless 挂载可能失效！"
+        
+        # 兜底尝试：如果系统层尚未挂载成功，在后期尝试强行进行运行时动态 bind 挂载注入
+        mount -o bind "$dest_hosts" /system/etc/hosts 2>/dev/null
+        if grep -q "google" /system/etc/hosts 2>/dev/null; then
+            log_msg SUCCESS "[挂载检查] 后期运行时动态 bind 注入成功，系统 Hosts 已强制生效！"
+        fi
     fi
     cat /system/etc/hosts >> "$HOSTS_LOG"
     echo "========================================================" >> "$HOSTS_LOG"
-}
-
-check_fcm_hosts_hit() {
-    local dest_hosts="$MODDIR/system/etc/hosts"
-    if [ ! -f "$dest_hosts" ]; then
-        log_msg WARN "尚未生成 Hosts 文件，跳过命中检测。"
-        return
-    fi
-
-    # 全局 Fake-IP 盲测判定
-    local dns_test=""
-    if command -v nslookup > /dev/null 2>&1; then
-        dns_test=$(nslookup a.fake.ip.test.fcm.fixer 2>/dev/null | grep -A 1 "Name:" | grep "Address" | awk '{print $2}' | tail -n 1)
-    fi
-    [ -z "$dns_test" ] && dns_test=$(ping -c 1 -W 1 a.fake.ip.test.fcm.fixer 2>/dev/null | grep -oE "\([0-9.]+\)" | tr -d '()')
-    
-    local is_fake_ip_global=0
-    if echo "$dns_test" | grep -q -E "^198\.18\."; then
-        is_fake_ip_global=1
-        log_msg WARN "📢 [网络状态] 当前处于透明代理 Fake-IP 托管环境。"
-    fi
-
-    # 获取全机活跃套接字会话中目标端口为 5228-5230/443 且状态为已建立的连接
-    local all_conns=$(ss -ant 2>/dev/null | grep "ESTAB" | grep -E ":522[89]|:5230|:443")
-    if [ -z "$all_conns" ]; then
-        log_msg WARN "当前未检测到任何活跃的 FCM (5228/5229/5230/443) TCP 连接。"
-        return
-    fi
-
-    # 【分支 A：Fake-IP 穿透检测机制】
-    if [ "$is_fake_ip_global" -eq 1 ]; then
-        # 排除回环及Fake-IP保留网段，抓取代理内核发出的真实对端物理公网连接
-        local real_outbound=$(echo "$all_conns" | awk '{print $5}' | grep -v -E "^127\.|^10\.|^192\.168\.|^198\.1[89]\.")
-        if [ -n "$real_outbound" ]; then
-            echo "$real_outbound" | sort -u | while read -r remote_peer; do
-                local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
-                local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
-                log_msg INFO "🎯 [穿透追踪] 成功抓取到代理内核外发的 FCM 真实物理公网 IP: $clean_ip (端口: $clean_port)"
-                
-                if grep -q "$clean_ip" "$dest_hosts"; then
-                    local hit_line=$(grep "$clean_ip" "$dest_hosts" | head -n 1 | tr -s '\t ' ' ')
-                    log_msg MATCH "★★★ 命中成功！代理内核已成功将流量桥接至你的优选 Hosts 节点！ ★★★"
-                    log_msg MATCH "--> 命中规则: $hit_line"
-                else
-                    log_msg WARN "⚠️ 代理外发连接未命中优选 Hosts。原因：Clash 内核拥有独立 DNS 缓存或使用了远程公网 DNS 解析。"
-                fi
-            done
-            return
-        else
-            log_msg WARN "⚠️ 虽然检测到系统触发了 FCM 会话，但代理内核当前并没有向外发出直连(DIRECT)的公网物理 TCP 连接。"
-            log_msg WARN "💡 [诊断提示]：极大概率你在代理软件中将 FCM 域名分流到了 [代理/节点分组] 而非 DIRECT 直连。建议前往 Clash/Mihomo 将 mtalk.google.com 设为 DIRECT。"
-            return
-        fi
-    fi
-
-    # 【分支 B：常规直连/非 Fake-IP 精准检测】
-    # 筛选属于 GMS 核心进程的对应端口连接
-    local gms_conns=$(ss -antp 2>/dev/null | grep "ESTAB" | grep -E "com.google.android.gms|GmsCore" | grep -E ":522[89]|:5230|:443")
-    if [ -z "$gms_conns" ]; then
-        # 如果 ss -p 无法直接拿到进程（部分精简系统的限制），回退到全局检索
-        gms_conns="$all_conns"
-    fi
-
-    echo "$gms_conns" | awk '{print $5}' | sort -u | while read -r remote_peer; do
-        [ -z "$remote_peer" ] && continue
-        local clean_ip=$(echo "$remote_peer" | sed -E 's/\[?([0-9a-fA-F:.]+)\]?:[0-9]+/\1/')
-        local clean_port=$(echo "$remote_peer" | sed -E 's/.*:([0-9]+)$/\1/')
-        
-        log_msg INFO "发现活跃直连 FCM 通道 -> 远程 IP: $clean_ip | 目标端口: $clean_port"
-        
-        if grep -q "$clean_ip" "$dest_hosts"; then
-            local hit_line=$(grep "$clean_ip" "$dest_hosts" | head -n 1 | tr -s '\t ' ' ')
-            log_msg MATCH "★★★ 命中成功！当前连接正通过端口 [$clean_port] 直连优选 Hosts 节点！ ★★★"
-            log_msg MATCH "--> 命中规则: $hit_line"
-        else
-            log_msg WARN "⚠️ 未命中：当前通信 IP ($clean_ip) 不在你的优选 Hosts 列表中。"
-            log_msg WARN "💡 [诊断提示]：若挂载正常，可能是由于系统仍在使用过期的本地旧 DNS 缓存，请重启 Google Play 服务或开关飞行模式重试。"
-        fi
-    done
-}
-
-log_fcm_info() {
-    echo -e "\n\033[36m================= FCM 状态与诊断截取 =================\033[0m" >> "$LOGFILE"
-    check_fcm_hosts_hit
-    log_msg INFO "抓取 GcmService 核心状态:"
-    dumpsys activity service com.google.android.gms/.gcm.GcmService 2>/dev/null | grep -E -i "connection|endpoint|connected|status|error|network" -A 5 >> "$LOGFILE"
-    echo -e "\033[36m========================================================\033[0m\n" >> "$LOGFILE"
-}
-
-monitor_network_changes() {
-    log_msg INFO "网络状态监视守护进程已启动 (内核事件驱动模式)..."
-    local last_trigger=0
-    
-    ip monitor route | while read -r line; do
-        if echo "$line" | grep -q "default via"; then
-            local current_time=$(date +%s)
-            if [ $((current_time - last_trigger)) -gt 10 ]; then
-                last_trigger=$current_time
-                sleep 3
-                
-                local active_iface=$(ip route get 8.8.8.8 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
-                local net_type="未知网络"
-                
-                case "$active_iface" in
-                    wlan*) net_type="Wi-Fi ($active_iface)" ;;
-                    rmnet*|ccmni*|pdp*) net_type="移动数据 ($active_iface)" ;;
-                    tun*|tap*) net_type="VPN/代理节点 ($active_iface)" ;;
-                    *) [ -n "$active_iface" ] && net_type="$active_iface" ;;
-                esac
-                
-                echo -e "\n\033[1;36m========================================================\033[0m" >> "$LOGFILE"
-                log_msg INFO "🌐 监测到网络环境物理切换！主网出口变更为: $net_type"
-                
-                local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
-                for chain in $chains; do
-                    remove_block_rules "filter" "$chain" "ipv4"
-                    remove_block_rules "filter" "$chain" "ipv6"
-                done
-                
-                update_hosts &
-                
-                # 延迟 10 秒等待新网络会话稳固后，输出穿透核对报告
-                ( sleep 10; log_fcm_info ) &
-            fi
-        fi
-    done
 }
