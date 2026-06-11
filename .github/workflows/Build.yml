@@ -2,8 +2,11 @@ name: Build Module
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'update.json' # 忽略对 update.json 的自身变更，防止死循环
   workflow_dispatch:
 
 jobs:
@@ -26,7 +29,7 @@ jobs:
           VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
           VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
           DATE=$(date +'%Y%m%d')
-          # 统一 release 标签格式：v1.0.9-20260611
+          # 统一 release 标签格式：v1.0.4-20260612
           RELEASE_TAG="v${VERSION}-${DATE}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
@@ -38,7 +41,7 @@ jobs:
           cat <<EOF > update.json
           {
             "version": "${{ env.VERSION }}",
-            "versionCode": ${{ env.VERSION_CODE }},
+            "versionCode": ${{ env.VERSION_CODE },
             "zipUrl": "https://github.boki.moe/https://github.com/Marywanmary/FCM-Fixer/releases/download/${{ env.RELEASE_TAG }}/FCM-Fixer-${{ env.RELEASE_TAG }}.zip",
             "changelog": "https://github.boki.moe/https://raw.githubusercontent.com/Marywanmary/FCM-Fixer/main/CHANGELOG.md"
           }
@@ -49,14 +52,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add update.json
+          # 使用 [skip ci] 确保回push代码时绝不重复触发工作流
           git commit -m "chore: 机器人自动更新 update.json 为 ${{ env.RELEASE_TAG }} [skip ci]" || echo "无变更"
           git push origin HEAD:main
 
       - name: 打包模块 ZIP
         run: |
           mkdir -p output
+          # 极致安全打包：排除 output 目录、所有 markdown 文本、git 痕迹以及 CI 临时生成的 update.json
           zip -r9 "output/FCM-Fixer-${{ env.RELEASE_TAG }}.zip" . \
-            -x "*.git*" -x ".github/*" -x "output/*" -x "*.md" -x "*.log"
+            -x "output/*" -x "*.git*" -x ".github/*" -x "*.md" -x "*.log" -x "update.json"
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
@@ -64,10 +69,13 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: FCM-Fixer ${{ env.RELEASE_TAG }}
           body: |
-            ### 🚀 FCM-Fixer 更新
-            - 全自动打包生成的模块文件。
-            - 兼容 Magisk / KernelSU / APatch。
-            - 请下载下方的 `.zip` 文件刷入即可。
+            ### 🚀 FCM-Fixer 自动化构建更新
+            - **构建版本**：${{ env.VERSION }} (${{ env.VERSION_CODE }})
+            - **构建日期**：${{ env.DATE }}
+            - **框架支持**：Magisk / KernelSU / APatch (Systemless 挂载)
+            
+            #### 🗂️ 本版更新日志快报
+            建议参见项目根目录的 [CHANGELOG.md](https://github.com/Marywanmary/FCM-Fixer/blob/main/CHANGELOG.md) 查看详细变更。
           files: output/FCM-Fixer-*.zip
           draft: false
           prerelease: false
