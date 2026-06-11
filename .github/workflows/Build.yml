@@ -1,4 +1,4 @@
-name: Build and Release Module
+name: Release Module
 
 # 触发条件：当推送形如 v1.0, v1.0.1 的 Tag 时，或者手动点击运行
 on:
