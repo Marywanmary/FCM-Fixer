@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.11] - 2026-06-12
+### Fixed
+- **彻底修复飞行模式和5G/4G重连盲区**：重构了事件监视器的底层内核管道匹配逻辑。先前的 `grep "default via"` 严格过滤导致模块彻底错失了移动数据网络（蜂窝默认路由为无 `via` 网关的点对点链路拓扑 `default dev rmnet`）的重连事件。新版扩大了 `ip monitor` 的监听维面（包含 `link`, `address`, `route`），并在底层引入 `"default|state UP|LOWER_UP"` 三级泛匹配以及动态延时鉴权机制（防止飞行模式开启时的假性唤醒）。现已完美实现对飞行模式秒切、Wi-Fi与5G互换的无死角秒级监控与即时阻断清理。
+- 
 ## [v1.0.10] - 2026-06-12
 ### Fixed
 - **彻底解决开机早期 DNS 抢跑导致的首次连接未命中问题**：Android 开机机制决定了 GmsCore 发起网络连接的速度通常快于模块框架层执行 Systemless Hosts 挂载的速度，这会导致 FCM 在开机首个长连接中必然使用非优选的默认 IP 且长期被复用。针对该生命周期痛点，现于 `service.sh` 开机 30 秒后的终极复查阶段，加入针对 `com.google.android.gms.persistent` 常驻核心进程的**无感斩断重连机制**。强迫 GMS 丢弃抢跑连接，依据已完美挂载的新 Hosts 发起二次重连，从而确保 FCM 在开机后迅速切入满血优选状态。
