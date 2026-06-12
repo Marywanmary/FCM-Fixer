@@ -218,28 +218,44 @@ log_fcm_info() {
     sync_to_box
 }
 
+# ========================================================
+# 🌟 核心修复：全维度底层网络事件监听 (兼容飞行模式和5G/4G)
+# ========================================================
 monitor_network_changes() {
-    log_msg INFO "网络状态监视守护进程已启动 (内核事件驱动模式)..."
+    log_msg INFO "网络状态监视守护进程已启动 (内核全维事件驱动模式)..."
     local last_trigger=0
     
-    ip monitor route | while read -r line; do
-        if echo "$line" | grep -q "default via"; then
+    # 将监听维度扩大到 link(物理网卡), address(IP变动), route(路由)
+    ip monitor link address route 2>/dev/null | while read -r line; do
+        # 取消苛刻的 "default via" 匹配
+        # 改为匹配: 默认路由(default) 或 网卡唤醒(state UP) 或 物理连通(LOWER_UP)
+        if echo "$line" | grep -q -E "default|state UP|LOWER_UP"; then
             local current_time=$(date +%s)
+            
             if [ $((current_time - last_trigger)) -gt 10 ]; then
                 last_trigger=$current_time
-                sleep 3
                 
+                # 延迟 5 秒，等待基带唤醒、DHCP 获取 IP 及系统底层规则下发完毕
+                sleep 5
+                
+                # 尝试抓取外网出口路由
                 local active_iface=$(ip route get 8.8.8.8 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
+                
+                # 【智能防误触】：如果是开启飞行模式导致的断网，ip route 必然拿不到结果，这里直接拦截，避免静默断网引发刷屏
+                if [ -z "$active_iface" ]; then
+                    continue
+                fi
+                
                 local net_type="未知网络"
                 case "$active_iface" in
                     wlan*) net_type="Wi-Fi ($active_iface)" ;;
-                    rmnet*|ccmni*|pdp*) net_type="移动数据 ($active_iface)" ;;
+                    rmnet*|ccmni*|pdp*) net_type="移动数据/蜂窝网络 ($active_iface)" ;;
                     tun*|tap*) net_type="VPN/代理节点 ($active_iface)" ;;
                     *) [ -n "$active_iface" ] && net_type="$active_iface" ;;
                 esac
                 
                 echo -e "\n\033[1;36m========================================================\033[0m" >> "$MASTER_LOG"
-                log_msg INFO "🌐 监测到网络环境物理切换！主网出口变更为: $net_type"
+                log_msg INFO "🌐 监测到网络物理链路大洗牌 (如关闭飞行模式/切换网络)！当前主网出口: $net_type"
                 
                 local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
                 for chain in $chains; do
