@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.14] - 2026-06-12
+### Added
+- **引入业界标准的「弹性指数退避算法 (Exponential Backoff Polling)」**：针对底层强轮询架构可能引发的耗电问题，彻底重构了睡眠机制。模块现在具备动态的自适应嗅探频率：在网络状态静默时，轮询间隔会以 `3s -> 6s -> 12s -> 24s -> 30s` 的指数级曲线逐步拉长，确保设备能完美进入 Android Doze 深度休眠，杜绝无意义的 CPU 唤醒耗电；而一旦侦测到任何网络变动（如切换 Wi-Fi 或开启透明代理），探测器会瞬间将休眠重置为 3 秒的最高灵敏度频率。完美平衡了“秒级无死角响应”与“极限省电”这一对底层矛盾，达到工程级优化水准。
+
 ## [v1.0.13] - 2026-06-12
 ### Changed
 - **重构为「零耗电 Logcat 事件驱动架构」**：抛弃了基于 `ip monitor` 会受困于 4KB Linux Block Buffering（管道缓冲区死锁）的问题，同时直接废弃了会打破 Android Doze 深度休眠机制的高耗电 `sleep` 轮询脏方案。新架构通过挂起监听 Android 原生的 `ConnectivityService` 系统流，实现了对基带唤醒、飞行模式秒切、代理客户端开闭的 **毫秒级 0 耗电** 绝对响应，达成工业级网络守护标准。
