@@ -219,51 +219,72 @@ log_fcm_info() {
 }
 
 # ========================================================
-# 🌟 核心架构终极重构：零耗电 Logcat 事件驱动 + 透明代理穿透
+# 🌟 核心终极重构：业界标准「指数退避 (Exponential Backoff)」弹性状态轮询
 # ========================================================
 monitor_network_changes() {
-    log_msg INFO "网络状态监视守护进程已启动 (零耗电 Logcat 事件驱动模式)..."
+    log_msg INFO "网络状态监视守护进程已启动 (弹性指数退避轮询模式)..."
     
-    # 增加 while true 守护壳，防止 logd 守护进程重启或缓冲区刷新导致挂起失效
-    (
-        local last_iface=""
-        while true; do
-            # 监听 Android 网络管理核心服务的无缓冲、原生事件输出流
-            logcat -b main -s ConnectivityService NetworkMonitor | while read -r line; do
+    local last_iface=""
+    
+    # 定义弹性退避参数
+    local MIN_SLEEP=3
+    local MAX_SLEEP=30  # 上限 30 秒。既能保证进入深度休眠省电，又能容忍合理的响应延迟
+    local current_sleep=$MIN_SLEEP
+    
+    while true; do
+        # 探测当前底层物理出口
+        local current_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
+        [ -z "$current_iface" ] && current_iface="OFFLINE"
+        
+        # 💡 发现网卡发生变更！
+        if [ "$current_iface" != "$last_iface" ]; then
+            
+            # 排除第一次脚本启动时的静默记录与纯断网状态
+            if [ -n "$last_iface" ] && [ "$current_iface" != "OFFLINE" ]; then
+                local net_type="未知网络"
+                case "$current_iface" in
+                    wlan*) net_type="Wi-Fi ($current_iface)" ;;
+                    rmnet*|ccmni*|pdp*) net_type="移动数据/蜂窝网络 ($current_iface)" ;;
+                    tun*|tap*) net_type="VPN/透明代理节点 ($current_iface)" ;;
+                    *) net_type="$current_iface" ;;
+                esac
                 
-                if echo "$line" | grep -q -E "Active network is now|Starting|Validated"; then
-                    
-                    # 采用 223.5.5.5 查询，完美绕过透明代理对海外 IP 的强行 TUN 接管
-                    local current_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
-                    [ -z "$current_iface" ] && current_iface="OFFLINE"
-                    
-                    if [ "$current_iface" != "$last_iface" ]; then
-                        if [ -n "$last_iface" ] && [ "$current_iface" != "OFFLINE" ]; then
-                            local net_type="未知网络"
-                            case "$current_iface" in
-                                wlan*) net_type="Wi-Fi ($current_iface)" ;;
-                                rmnet*|ccmni*|pdp*) net_type="移动数据/蜂窝网络 ($current_iface)" ;;
-                                tun*|tap*) net_type="VPN/透明代理节点 ($current_iface)" ;;
-                                *) net_type="$current_iface" ;;
-                            esac
-                            
-                            echo -e "\n\033[1;36m========================================================\033[0m" >> "$MASTER_LOG"
-                            log_msg INFO "🌐 (Logcat驱动) 监测到网络物理链路大洗牌！( $last_iface -> $current_iface ) | 出口: $net_type"
-                            
-                            local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
-                            for chain in $chains; do
-                                remove_block_rules "filter" "$chain" "ipv4"
-                                remove_block_rules "filter" "$chain" "ipv6"
-                            done
-                            
-                            update_hosts &
-                            track_fcm_hits_loop &
-                        fi
-                        last_iface="$current_iface"
-                    fi
-                fi
-            done
-            sleep 2
-        done
-    ) &
+                echo -e "\n\033[1;36m========================================================\033[0m" >> "$MASTER_LOG"
+                log_msg INFO "🌐 监测到网络发生实质性切换！( $last_iface -> $current_iface ) | 出口: $net_type"
+                
+                local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
+                for chain in $chains; do
+                    remove_block_rules "filter" "$chain" "ipv4"
+                    remove_block_rules "filter" "$chain" "ipv6"
+                done
+                
+                update_hosts &
+                
+                # =========================================================
+                # 💥 【逻辑核心修复】：斩断旧连接，强制 GMS 应用新 Hosts 💥
+                # =========================================================
+                log_msg INFO "强制重置 GmsCore 网络通道，切断缓存连接，迫使其重新读取新环境的 Hosts..."
+                killall -9 com.google.android.gms.persistent 2>/dev/null
+                
+                track_fcm_hits_loop &
+            fi
+            
+            last_iface="$current_iface"
+            
+            # 💥 【核心机制】：网络刚发生过变动，立刻将轮询频率拉满（重置为 3 秒）
+            current_sleep=$MIN_SLEEP
+            
+        else
+            # 💤 【核心机制】：网络没有变化，开始指数级退避，逐步进入深度省电状态
+            current_sleep=$((current_sleep * 2))
+            
+            # 触及设定的阈值上限，锁定为慢速轮询
+            if [ $current_sleep -gt $MAX_SLEEP ]; then
+                current_sleep=$MAX_SLEEP
+            fi
+        fi
+        
+        # 按照动态计算出的时间进行自适应休眠
+        sleep $current_sleep
+    done
 }
