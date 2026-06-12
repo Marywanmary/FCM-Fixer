@@ -219,71 +219,51 @@ log_fcm_info() {
 }
 
 # ========================================================
-# 🌟 核心修复：无损异步解耦事件驱动架构 (解决防抖吞事件与慢网络漏触)
+# 🌟 核心架构终极重构：零耗电 Logcat 事件驱动 + 透明代理穿透
 # ========================================================
 monitor_network_changes() {
-    log_msg INFO "网络状态监视守护进程已启动 (无损异步哨兵模式)..."
+    log_msg INFO "网络状态监视守护进程已启动 (零耗电 Logcat 事件驱动模式)..."
     
-    # 1. 消费者：专职后台处理工人
+    # 增加 while true 守护壳，防止 logd 守护进程重启或缓冲区刷新导致挂起失效
     (
+        local last_iface=""
         while true; do
-            # 只要看到信号，说明有事件需要处理
-            if [ -f "$SAFE_DIR/net_changed" ]; then
-                # 看到信号立刻吃掉。进入干活和冷却期。
-                # 期间发生的任何新事件，前端哨兵都会重新生成此文件进行事件堆叠防抖。
-                rm -f "$SAFE_DIR/net_changed"
+            # 监听 Android 网络管理核心服务的无缓冲、原生事件输出流
+            logcat -b main -s ConnectivityService NetworkMonitor | while read -r line; do
                 
-                # 开始高频轮询等待外网真正常通 (最长等待 15 秒，包容基带拨号和慢获取 IP)
-                local wait_count=0
-                local net_ready=0
-                while [ $wait_count -lt 15 ]; do
-                    # 使用 223.5.5.5 替代 8.8.8.8，完美穿透透明代理 TUN 网卡劫持，精准抓取底层物理网卡
-                    if ip route get 223.5.5.5 >/dev/null 2>&1; then
-                        net_ready=1
-                        break
+                if echo "$line" | grep -q -E "Active network is now|Starting|Validated"; then
+                    
+                    # 采用 223.5.5.5 查询，完美绕过透明代理对海外 IP 的强行 TUN 接管
+                    local current_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
+                    [ -z "$current_iface" ] && current_iface="OFFLINE"
+                    
+                    if [ "$current_iface" != "$last_iface" ]; then
+                        if [ -n "$last_iface" ] && [ "$current_iface" != "OFFLINE" ]; then
+                            local net_type="未知网络"
+                            case "$current_iface" in
+                                wlan*) net_type="Wi-Fi ($current_iface)" ;;
+                                rmnet*|ccmni*|pdp*) net_type="移动数据/蜂窝网络 ($current_iface)" ;;
+                                tun*|tap*) net_type="VPN/透明代理节点 ($current_iface)" ;;
+                                *) net_type="$current_iface" ;;
+                            esac
+                            
+                            echo -e "\n\033[1;36m========================================================\033[0m" >> "$MASTER_LOG"
+                            log_msg INFO "🌐 (Logcat驱动) 监测到网络物理链路大洗牌！( $last_iface -> $current_iface ) | 出口: $net_type"
+                            
+                            local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
+                            for chain in $chains; do
+                                remove_block_rules "filter" "$chain" "ipv4"
+                                remove_block_rules "filter" "$chain" "ipv6"
+                            done
+                            
+                            update_hosts &
+                            track_fcm_hits_loop &
+                        fi
+                        last_iface="$current_iface"
                     fi
-                    sleep 1
-                    wait_count=$((wait_count + 1))
-                done
-                
-                # 如果网络确实通了（非飞行模式开关时的短暂虚假唤醒）
-                if [ $net_ready -eq 1 ]; then
-                    # 额外等 2 秒，确保系统的防火墙规则和代理路由彻底下发完毕
-                    sleep 2
-                    
-                    local active_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
-                    local net_type="未知网络"
-                    case "$active_iface" in
-                        wlan*) net_type="Wi-Fi ($active_iface)" ;;
-                        rmnet*|ccmni*|pdp*) net_type="移动数据/蜂窝网络 ($active_iface)" ;;
-                        tun*|tap*) net_type="VPN/代理节点 ($active_iface)" ;;
-                        *) [ -n "$active_iface" ] && net_type="$active_iface" ;;
-                    esac
-                    
-                    echo -e "\n\033[1;36m========================================================\033[0m" >> "$MASTER_LOG"
-                    log_msg INFO "🌐 监测到网络物理链路实质性大洗牌！当前主网出口: $net_type"
-                    
-                    local chains="fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns zte_fw_gms"
-                    for chain in $chains; do
-                        remove_block_rules "filter" "$chain" "ipv4"
-                        remove_block_rules "filter" "$chain" "ipv6"
-                    done
-                    
-                    update_hosts &
-                    track_fcm_hits_loop &
-                    
-                    # 冷却 10 秒，防止同一次网络连接产生的长尾余波重复触发
-                    sleep 10
                 fi
-            fi
-            sleep 1
+            done
+            sleep 2
         done
     ) &
-
-    # 2. 生产者 (哨兵)：极度轻量，毫无阻塞，疯狂倾听全维度内核事件
-    ip monitor link address route 2>/dev/null | while read -r line; do
-        if echo "$line" | grep -q -E "default|state UP|LOWER_UP"; then
-            touch "$SAFE_DIR/net_changed"
-        fi
-    done
 }
