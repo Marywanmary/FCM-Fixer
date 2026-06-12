@@ -239,7 +239,7 @@ monitor_network_changes() {
                 sleep 5
                 
                 # 尝试抓取外网出口路由
-                local active_iface=$(ip route get 8.8.8.8 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
+                local active_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
                 
                 # 【智能防误触】：如果是开启飞行模式导致的断网，ip route 必然拿不到结果，这里直接拦截，避免静默断网引发刷屏
                 if [ -z "$active_iface" ]; then
