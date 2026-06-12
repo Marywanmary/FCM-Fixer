@@ -50,7 +50,7 @@ fi
 mkdir -p "$MODPATH/system/etc"
 dest_hosts="$MODPATH/system/etc/hosts"
 
-ui_print "- 正在尝试预下载最新 Hosts..."
+ui_print "- 正在尝试下载最新 Hosts..."
 if [ "$mode" = "ipv4" ]; then
     url="https://fcm-hosts.cagedbird.cn/fcm_ipv4.hosts"
     fallback="https://github.boki.moe/https://raw.githubusercontent.com/cagedbird043/fcm-hosts-next/main/fcm_ipv4.hosts"
