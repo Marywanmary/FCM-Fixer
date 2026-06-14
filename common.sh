@@ -288,3 +288,38 @@ monitor_network_changes() {
         sleep $current_sleep
     done
 }
+# ========================================================
+# 🌟 核心新增特性：无感静默热更新守护进程 (类 Cron 定时任务)
+# ========================================================
+auto_update_daemon() {
+    log_msg INFO "⏰ 每日自动热更新守护进程已挂载后台 (目标时间: 每日早 07:00)..."
+    
+    while true; do
+        # 提取当前时间的 小时和分钟 (例如 0700)
+        local current_time=$(date "+%H%M")
+        
+        # 命中早上 7:00 (给予 2 分钟的容差防止睡眠误差)
+        if [ "$current_time" = "0700" ] || [ "$current_time" = "0701" ]; then
+            
+            echo -e "\n\033[1;35m========================================================\033[0m" >> "$MASTER_LOG"
+            log_msg INFO "🌅 触发每日晨间例行维护：开始自动拉取最新 FCM 优选 Hosts..."
+            
+            # 1. 静默下载并覆盖更新 Hosts
+            update_hosts
+            
+            # 2. 斩断旧连接，迫使 GMS 热重载应用新规则 (全程无须重启手机)
+            log_msg INFO "热更新完毕！强制重置 GmsCore 网络通道，静默应用今日最新节点..."
+            killall -9 com.google.android.gms.persistent 2>/dev/null
+            
+            # 3. 追踪命中情况
+            track_fcm_hits_loop &
+            
+            # ⚡ 关键防抖：执行完毕后，强制深度休眠 23 个小时 (82800秒)
+            # 确保今天绝不会再重复触发，同时极其省电
+            sleep 82800
+        else
+            # 未到时间，每隔 60 秒醒来检查一次手表 (极低频，耗电忽略不计)
+            sleep 60
+        fi
+    done
+}
