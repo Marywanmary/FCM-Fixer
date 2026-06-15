@@ -225,21 +225,15 @@ monitor_network_changes() {
     log_msg INFO "网络状态监视守护进程已启动 (弹性指数退避轮询模式)..."
     
     local last_iface=""
-    
-    # 定义弹性退避参数
     local MIN_SLEEP=3
-    local MAX_SLEEP=30  # 上限 30 秒。既能保证进入深度休眠省电，又能容忍合理的响应延迟
+    local MAX_SLEEP=30
     local current_sleep=$MIN_SLEEP
     
     while true; do
-        # 探测当前底层物理出口
         local current_iface=$(ip route get 223.5.5.5 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}' | head -n 1)
         [ -z "$current_iface" ] && current_iface="OFFLINE"
         
-        # 💡 发现网卡发生变更！
         if [ "$current_iface" != "$last_iface" ]; then
-            
-            # 排除第一次脚本启动时的静默记录与纯断网状态
             if [ -n "$last_iface" ] && [ "$current_iface" != "OFFLINE" ]; then
                 local net_type="未知网络"
                 case "$current_iface" in
@@ -260,9 +254,6 @@ monitor_network_changes() {
                 
                 update_hosts &
                 
-                # =========================================================
-                # 💥 【逻辑核心修复】：斩断旧连接，强制 GMS 应用新 Hosts 💥
-                # =========================================================
                 log_msg INFO "强制重置 GmsCore 网络通道，切断缓存连接，迫使其重新读取新环境的 Hosts..."
                 killall -9 com.google.android.gms.persistent 2>/dev/null
                 
@@ -270,56 +261,62 @@ monitor_network_changes() {
             fi
             
             last_iface="$current_iface"
-            
-            # 💥 【核心机制】：网络刚发生过变动，立刻将轮询频率拉满（重置为 3 秒）
             current_sleep=$MIN_SLEEP
-            
         else
-            # 💤 【核心机制】：网络没有变化，开始指数级退避，逐步进入深度省电状态
             current_sleep=$((current_sleep * 2))
-            
-            # 触及设定的阈值上限，锁定为慢速轮询
             if [ $current_sleep -gt $MAX_SLEEP ]; then
                 current_sleep=$MAX_SLEEP
             fi
         fi
-        
-        # 按照动态计算出的时间进行自适应休眠
         sleep $current_sleep
     done
 }
+
 # ========================================================
-# 🌟 核心新增特性：无感静默热更新守护进程 (类 Cron 定时任务)
+# 🌟 核心新增特性：无感静默热更新守护进程 (带有日期防抖印记)
 # ========================================================
 auto_update_daemon() {
-    log_msg INFO "⏰ 每日自动热更新守护进程已挂载后台 (目标时间: 每日早 07:00)..."
+    log_msg INFO "⏰ 每日自动热更新守护进程已挂载后台 (目标规则: 每日 07:00 后触发一次)..."
+    
+    local last_run_file="$SAFE_DIR/last_update_date"
     
     while true; do
-        # 提取当前时间的 小时和分钟 (例如 0700)
-        local current_time=$(date "+%H%M")
+        # 获取当前小时 (去除前导0以防八进制错误，如 08 报错)
+        local current_hour=$(date "+%H" | sed 's/^0//')
+        [ -z "$current_hour" ] && current_hour=0
         
-        # 命中早上 7:00 (给予 2 分钟的容差防止睡眠误差)
-        if [ "$current_time" = "0700" ] || [ "$current_time" = "0701" ]; then
+        # 获取今天完整的日期 (例如 20260612)
+        local current_date=$(date "+%Y%m%d")
+        
+        # 读取小纸条上的上次执行日期
+        local last_run=""
+        [ -f "$last_run_file" ] && last_run=$(cat "$last_run_file")
+        
+        # 核心逻辑：只要过了 7 点 (包含 7 点)，且今天还没有执行过！
+        if [ "$current_hour" -ge 7 ] && [ "$current_date" != "$last_run" ]; then
             
             echo -e "\n\033[1;35m========================================================\033[0m" >> "$MASTER_LOG"
-            log_msg INFO "🌅 触发每日晨间例行维护：开始自动拉取最新 FCM 优选 Hosts..."
+            log_msg INFO "🌅 触发每日例行维护：时间已超过 07:00，开始自动拉取最新 FCM 优选 Hosts..."
             
-            # 1. 静默下载并覆盖更新 Hosts
+            # 1. 静默下载并热更新 Hosts
             update_hosts
             
             # 2. 斩断旧连接，迫使 GMS 热重载应用新规则 (全程无须重启手机)
             log_msg INFO "热更新完毕！强制重置 GmsCore 网络通道，静默应用今日最新节点..."
             killall -9 com.google.android.gms.persistent 2>/dev/null
             
-            # 3. 追踪命中情况
+            # 3. 追踪重连命中情况
             track_fcm_hits_loop &
             
-            # ⚡ 关键防抖：执行完毕后，强制深度休眠 23 个小时 (82800秒)
-            # 确保今天绝不会再重复触发，同时极其省电
-            sleep 82800
+            # 4. 留下防抖印记：记录今天的日期到小纸条，保证今天绝不重复执行
+            echo "$current_date" > "$last_run_file"
+            
+            # 执行完毕后，深度休眠 12 个小时 (43200秒)。极大减少无谓的判断轮询。
+            sleep 43200
         else
-            # 未到时间，每隔 60 秒醒来检查一次手表 (极低频，耗电忽略不计)
-            sleep 60
+            # 未满足条件 (比如现在是凌晨 3 点，或者今天早上 7 点刚更新过)
+            # 每 30 分钟 (1800秒) 醒来检查一次手表，耗电量趋近于 0
+            sleep 1800
         fi
     done
 }
