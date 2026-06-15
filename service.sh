@@ -49,16 +49,20 @@ done
         done
         
         # 强制斩断 GMS 抢跑的旧连接，迫使其依据新 Hosts 发起重连
-        log_msg INFO "强制重置 GmsCore 网络通道，切断抢跑连接，应用优选 Hosts..."
+        log_msg INFO "强制重置 GmsCore 网络通道，切断开机抢跑连接，应用优选 Hosts..."
         killall -9 com.google.android.gms.persistent 2>/dev/null
         
         # 再触发一次命中追踪探测链，验证重连结果
         track_fcm_hits_loop &
     ) &
 
+    # 启动高可靠弹性指数退避网络状态监视器
     monitor_network_changes &
+    
+    # 启动每日晨间 (早7点) 无感静默热更新守护进程
+    auto_update_daemon &
 
-    log_msg SUCCESS "开机初始化引导全部安全交割，后台常驻进程正常工作。"
+    log_msg SUCCESS "开机初始化引导全部安全交割，核心后台常驻进程均已正常工作。"
     echo -e "\033[1;32m============================================================\033[0m" >> "$MASTER_LOG"
     sync_to_box
 ) &
